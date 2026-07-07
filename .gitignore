@@ -1,0 +1,51 @@
+# OS 一時ファイル
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# エディタ設定
+.vscode/
+.idea/
+*.swp
+
+# 個人用ローカル設定(Git管理外)
+.claude/settings.local.json
+.claude/settings.local.json.tmp.*
+
+# 秘密情報
+.env
+.env.*
+*.pem
+*credentials*
+
+# 一時スクリーンショット等
+*.tmp
+tmp/
+*-screenshot.png
+
+# =====================================================================
+# 開発ハーネス(個人資産のため GitHub には公開しない)
+# ローカルには存在し Claude Code は参照するが、リモートには push されない。
+# 注意: ハーネス側ドキュメントの「.ai/ は Git 管理対象」という記述より、
+#       本プロジェクトの「ハーネス非公開」方針を優先する。
+# =====================================================================
+/agentic-dev-harness-template/
+/.claude/
+/.ai/
+/design/
+/CLAUDE.md
+/AGENTS.md
+/PROJECT.md
+/HARNESS.md
+/IDEA.md
+/scripts/README.md
+/scripts/codex-review.ps1
+/scripts/codex-review.sh
+/docs/harness-architecture.md
+/docs/development-workflow.md
+/docs/implementation-roadmap.md
+/docs/model-regression-checklist.md
+/docs/prompt-templates-sonnet-opus.md
+/docs/setup-claude-design.md
+/docs/adr/0001-codex-review-open-items.md
+/docs/adr/0002-autonomous-mode.md
