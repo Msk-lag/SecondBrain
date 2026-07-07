@@ -202,13 +202,13 @@ Obsidian のようなナレッジベースは「メモを手で書く行為自�
 - M4 以降複雑化するドメイン(ノート・エンティティ・階層・繋がり・要約キャッシュ)に対し、NestJS の強制的な構造規律が保守性に効く
 - 型の端から端までの共有は tRPC(スタンドアロンアダプタ)または ts-rest で分離型でも実現できる(方式は M0 で確定)
 
-**M0 で決める詳細**: ORM(Drizzle / Prisma)/ 型共有方式(tRPC / ts-rest / 共有 DTO)/ 認証ライブラリ / モノレポツール(pnpm workspaces 等)/ テスト・lint ツールチェーン / フロント詳細(3D グラフライブラリ = react-force-graph-3d 起点を想定、サーバー状態 = TanStack Query、クライアント状態 = Zustand、UI = Tailwind + shadcn/ui、ルーティング = React Router を想定)
+**M0 で確定した詳細**: ORM = **Drizzle ORM** / 型共有方式 = **ts-rest** / 認証ライブラリ = **`@nestjs/passport` + `passport-jwt`(+ `@nestjs/jwt`)**(この3点の決定理由は docs/adr/0101-orm-and-type-sharing.md 参照)/ モノレポツール = **pnpm workspaces** / テスト・lint ツールチェーン = **Vitest(モノレポ全体で統一)+ ESLint 9(flat config)+ typescript-eslint、フォーマットは Prettier**(この2点は PROJECT.md に決定理由を記載、独立の ADR は無し)。フロント詳細のうち **サーバー状態 = TanStack Query、クライアント状態 = Zustand、ルーティング = React Router、UI = Tailwind は M0 で導入済み**。**3D グラフライブラリ(react-force-graph-3d 起点を想定)と shadcn/ui は M0 では未決定**(shadcn/ui は M1 以降への導入延期を決定)
 
 ## 10. 未決事項
 
 | # | 事項 | 決めるタイミング |
 |---|---|---|
-| 1 | ~~技術スタック~~ → **TypeScript 統一・分離型(SPA + NestJS + ワーカー)で決定**(§9)。残りは ORM・型共有方式等の詳細 | M0 冒頭 |
+| 1 | ~~技術スタック~~ → **TypeScript 統一・分離型(SPA + NestJS + ワーカー)で決定**(§9)。**ORM = Drizzle ORM・型共有方式 = ts-rest・認証ライブラリ = `@nestjs/passport` + `passport-jwt`**(決定理由は docs/adr/0101-orm-and-type-sharing.md 参照)・**モノレポツール = pnpm workspaces も M0 で確定**(決定理由は PROJECT.md 参照) | M0 完了(2026-07-07) |
 | 2 | ~~AWS の具体構成~~ → **EC2 + RDS のみで決定**。残りはインスタンスサイズ・HTTPS 化(リバースプロキシ/証明書)の詳細 | デプロイ実施時(M1 完了後の任意タイミング) |
 | 3 | 埋め込みモデルの選定(ベクトル検索・クラスタリング共用) | M1 設計時 |
 | 4 | 表記ゆれ吸収の方式(エンティティ正規化のアルゴリズム) | M4 設計時 |
@@ -216,3 +216,4 @@ Obsidian のようなナレッジベースは「メモを手で書く行為自�
 | 6 | 3D 可視化ライブラリと描画上限(ノード数・LOD 戦略) | M5 設計時 |
 | 7 | 線の要約・NotebookLM プロンプトの出力フォーマット | M6 設計時 |
 | 8 | 身内公開時の認証方式・利用量上限の具体値 | M7 設計時 |
+| 9 | RDS(AWS 本番)で MariaDB 11.7 相当(VECTOR 型対応版)が提供されているか未確認。ローカルの `mariadb:11.7` イメージでの技術検証は M0 で完了済み(docs/adr/0102-vector-search-poc-result.md)だが、本番相当環境での確認は別途必要 | デプロイ実施時(M1 完了後の任意タイミング) |
