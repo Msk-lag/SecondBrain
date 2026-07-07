@@ -1,0 +1,13 @@
+node_modules
+dist
+build
+coverage
+pnpm-lock.yaml
+
+# 既存のハーネス・ドキュメント資産(本タスクの対象外。フォーマット変更しない)
+docs/
+design/
+.ai/
+*.md
+!apps/**/*.md
+!packages/**/*.md
