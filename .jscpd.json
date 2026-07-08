@@ -1,0 +1,7 @@
+{
+  "path": ["apps/web/src", "apps/api/src", "apps/worker/src", "packages/shared/src"],
+  "ignore": ["**/node_modules/**", "**/dist/**", "**/*.spec.ts", "**/*.spec.tsx"],
+  "output": "./report",
+  "reporters": ["console", "html"],
+  "threshold": 100
+}
