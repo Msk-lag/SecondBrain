@@ -1,0 +1,4 @@
+set -e
+
+pnpm exec lint-staged
+pnpm run scan:secrets:staged

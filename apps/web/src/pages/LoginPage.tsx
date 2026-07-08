@@ -37,6 +37,7 @@ export function LoginPage() {
           nextErrors.email = "メールアドレスを入力してください";
         }
         if (issue.path[0] === "password") {
+          // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- 検証エラーの文言であり秘密情報ではない
           nextErrors.password = "パスワードを入力してください";
         }
       }

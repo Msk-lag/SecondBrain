@@ -2,6 +2,7 @@ node_modules
 dist
 build
 coverage
+report
 pnpm-lock.yaml
 
 # 既存のハーネス・ドキュメント資産(本タスクの対象外。フォーマット変更しない)

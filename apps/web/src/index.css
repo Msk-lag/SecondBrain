@@ -38,10 +38,5 @@
 body {
   background-color: var(--bg);
   color: var(--ink-900);
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Hiragino Sans",
-    "Noto Sans JP",
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
 }

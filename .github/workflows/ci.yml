@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm typecheck
+
+      - run: pnpm lint
+
+      - run: pnpm format
+
+      - run: pnpm test:coverage
+
+      - run: pnpm duplication
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Use trusted gitleaks config from base ref (pull_request only)
+        if: github.event_name == 'pull_request'
+        run: |
+          if git cat-file -e "${{ github.event.pull_request.base.sha }}:.gitleaks.toml" 2>/dev/null; then
+            git show "${{ github.event.pull_request.base.sha }}:.gitleaks.toml" > .gitleaks.toml
+          else
+            echo ".gitleaks.toml does not exist on base ref yet (e.g. first PR introducing it); using the PR's own config."
+          fi
+
+      - name: Run gitleaks
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" \
+            -w /repo \
+            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            detect --source . -v --config .gitleaks.toml

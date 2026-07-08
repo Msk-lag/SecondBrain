@@ -11,7 +11,15 @@ const appContract = c.router({
 
 // 401 応答を受けたら保存済みトークンを破棄する(期限切れ・改ざん・JWT_SECRET 変更時の共通処理)
 const api: ApiFetcher = async (args) => {
-  const result = await tsRestFetchApi(args);
+  // baseHeaders は常に文字列を返す必要がある制約上、トークン未保存時は空文字列になる。
+  // 未認証リクエスト(ログイン・ヘルスチェック等)に空の Authorization ヘッダーを
+  // 送らないよう、ここで取り除く。
+  const headers = { ...args.headers };
+  if (!headers.Authorization) {
+    delete headers.Authorization;
+  }
+
+  const result = await tsRestFetchApi({ ...args, headers });
   if (result.status === 401) {
     useAuthStore.getState().clear();
   }
