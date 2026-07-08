@@ -1,1 +1,42 @@
 @import "tailwindcss";
+
+/*
+ * デザイントークン(design/handoffs/20260708-m1-mvp-screens.md)。
+ * IBM Plex Sans / Source Serif 4 の Web フォント配信方式は未確定(同ハンドオフの未解決事項2)のため、
+ * ここではシステムフォントフォールバックのみを使う。
+ */
+:root {
+  --bg: #faf9f8;
+  --surface: #ffffff;
+  --surface-muted: #f2f0ea;
+  --surface-muted-2: #ebe8e1;
+  --border: #e6e2d9;
+  --border-strong: #d4cfc2;
+  --ink-900: #1c1b18;
+  --ink-700: #4a473f;
+  --ink-600: #6d6a5f;
+  --ink-400: #9c978a;
+  --ink-300: #c7c1b2;
+  --accent: #33445e;
+  --accent-hover: #293650;
+  --accent-soft: #e9ecf1;
+  --accent-soft-border: #cbd3de;
+  --gold: #a9782b;
+  --gold-ink: #7a5a20;
+  --gold-soft: #fbf2de;
+  --gold-soft-border: #ebd9ae;
+  --danger: #ad3b26;
+  --danger-soft: #fbeae4;
+  --danger-soft-border: #f0c9bb;
+  --success: #3f7a5c;
+  --success-soft: #e8f2ec;
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--ink-900);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}

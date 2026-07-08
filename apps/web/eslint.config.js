@@ -26,5 +26,10 @@ export default tseslint.config(
         tsconfigRootDir: import.meta.dirname,
       },
     },
+    rules: {
+      // React の合成イベント型(FormEvent 等)は型定義自体に
+      // 「実在しない」という注記が付いており、このルールが広範囲に誤検知するため無効化
+      "sonarjs/deprecation": "off",
+    },
   },
 );

@@ -36,4 +36,13 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    files: ["**/*.spec.ts"],
+    rules: {
+      // テスト用の固定文字列(実秘密情報ではない)・DBモックのチェーン構造(select().from().where()...)
+      // を誤検知するため、spec ファイルに限り無効化する
+      "sonarjs/no-hardcoded-passwords": "off",
+      "sonarjs/no-nested-functions": "off",
+    },
+  },
 );

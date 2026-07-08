@@ -1,10 +1,6 @@
 packages:
   - "apps/*"
   - "packages/*"
-  # 一時対応: main には未マージの M1-1(feature/m1-1-db-auth-foundation)で追加された
-  # packages/db の残骸がローカルに残っているため、pnpm のワークスペース対象から除外する。
-  # M1-1 マージ後にこの行は削除すること(2026-07-08)。
-  - "!packages/db"
 allowBuilds:
   esbuild: true
   msgpackr-extract: true

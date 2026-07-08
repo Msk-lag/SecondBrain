@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
@@ -29,7 +29,7 @@ const tmpRoot = mkdtempSync(join(tmpdir(), "scan-staged-secrets-"));
 let exitCode = 0;
 
 try {
-  const tmpPaths = [];
+  const relativePaths = [];
 
   for (const file of stagedFiles) {
     let content;
@@ -44,11 +44,19 @@ try {
     const tmpPath = join(tmpRoot, file);
     mkdirSync(dirname(tmpPath), { recursive: true });
     writeFileSync(tmpPath, content);
-    tmpPaths.push(tmpPath);
+    relativePaths.push(file);
   }
 
-  if (tmpPaths.length === 0) {
+  if (relativePaths.length === 0) {
     process.exit(0);
+  }
+
+  // .secretlintignore はリポジトリルートからの相対パターンで書かれているため、
+  // 一時ディレクトリを疑似リポジトリルートとして扱えるよう、ignore ファイルも同じ場所へ複製する
+  // (絶対パスのままだと `.env.example` のような相対パターンが一時パスに一致しない)。
+  const secretlintignoreSrc = join(process.cwd(), ".secretlintignore");
+  if (existsSync(secretlintignoreSrc)) {
+    copyFileSync(secretlintignoreSrc, join(tmpRoot, ".secretlintignore"));
   }
 
   try {
@@ -59,9 +67,9 @@ try {
         "--no-gitignore",
         "--secretlintrc",
         join(process.cwd(), ".secretlintrc.json"),
-        ...tmpPaths,
+        ...relativePaths,
       ],
-      { stdio: "inherit", cwd: process.cwd() },
+      { stdio: "inherit", cwd: tmpRoot },
     );
   } catch (err) {
     exitCode = typeof err.status === "number" ? err.status : 1;
