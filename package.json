@@ -12,7 +12,10 @@
     "lint": "pnpm -r --if-present run lint",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
-    "poc:vector": "tsx scripts/poc/mariadb-vector-poc.ts"
+    "poc:vector": "tsx scripts/poc/mariadb-vector-poc.ts",
+    "db:generate": "pnpm --filter @secondbrain/db run db:generate",
+    "db:migrate": "pnpm --filter @secondbrain/db run db:migrate",
+    "db:seed": "pnpm --filter @secondbrain/db run db:seed"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

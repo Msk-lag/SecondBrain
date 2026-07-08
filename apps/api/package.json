@@ -21,9 +21,11 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
+    "@secondbrain/db": "workspace:*",
     "@secondbrain/shared": "workspace:*",
     "@ts-rest/core": "^3.52.1",
     "@ts-rest/nest": "^3.52.1",
+    "bcryptjs": "^3.0.2",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
@@ -49,8 +51,8 @@
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.7.3",
-    "typescript-eslint": "^8.20.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1",
     "vitest": "^4.1.10"
   }
 }

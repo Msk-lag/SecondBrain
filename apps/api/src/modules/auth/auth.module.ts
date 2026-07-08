@@ -1,23 +1,21 @@
 import { Module } from "@nestjs/common";
 import { PassportModule } from "@nestjs/passport";
 import { JwtModule } from "@nestjs/jwt";
-
-function getRequiredJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new Error("JWT_SECRET environment variable is required but not set");
-  }
-  return secret;
-}
+import { AuthController } from "./auth.controller";
+import { AuthService } from "./auth.service";
+import { JwtStrategy } from "./jwt.strategy";
+import { getRequiredJwtSecret } from "./jwt-secret";
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.register({
       secret: getRequiredJwtSecret(),
-      signOptions: { expiresIn: "1h" },
+      signOptions: { expiresIn: "7d" },
     }),
   ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy],
   exports: [JwtModule, PassportModule],
 })
 export class AuthModule {}

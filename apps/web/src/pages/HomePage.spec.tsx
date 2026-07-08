@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router";
 import { vi } from "vitest";
 import { HomePage } from "./HomePage";
 import { apiClient } from "../lib/api-client";
@@ -21,7 +22,9 @@ describe("HomePage", () => {
     const queryClient = new QueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <HomePage />
+        <MemoryRouter>
+          <HomePage />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 

@@ -1,9 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router";
 import { apiClient } from "../lib/api-client";
 import { useCounterStore } from "../store/useCounterStore";
+import { useAuthStore } from "../store/useAuthStore";
 
 export function HomePage() {
   const { count, increment } = useCounterStore();
+  const navigate = useNavigate();
+  const clearAuth = useAuthStore((state) => state.clear);
+  const handleLogout = () => {
+    clearAuth();
+    void navigate("/login", { replace: true });
+  };
   const healthQuery = useQuery({
     queryKey: ["health"],
     queryFn: async () => {
@@ -28,6 +36,9 @@ export function HomePage() {
         className="rounded bg-purple-600 px-4 py-2 text-white"
       >
         count is {count}
+      </button>
+      <button type="button" onClick={handleLogout} className="text-sm underline">
+        ログアウト
       </button>
     </main>
   );
