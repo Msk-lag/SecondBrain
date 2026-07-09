@@ -1,11 +1,23 @@
 @import "tailwindcss";
 
 /*
+ * フォント(design/handoffs/20260708-m1-mvp-screens.md 未解決事項2への回答: self-host)。
+ * UI = IBM Plex Sans、読み物(要約・アーカイブ本文・メモ本文)= Source Serif 4。
+ * 日本語は Web フォントを読み込まず、システムフォント(Hiragino Sans/Noto Sans JP 等)へフォールバックする。
+ */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/source-serif-4/400.css";
+@import "@fontsource/source-serif-4/600.css";
+
+/*
  * デザイントークン(design/handoffs/20260708-m1-mvp-screens.md)。
- * IBM Plex Sans / Source Serif 4 の Web フォント配信方式は未確定(同ハンドオフの未解決事項2)のため、
- * ここではシステムフォントフォールバックのみを使う。
  */
 :root {
+  --font-ui:
+    "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --font-reading: "Source Serif 4", "Hiragino Mincho ProN", "Noto Serif JP", var(--font-ui);
   --bg: #faf9f8;
   --surface: #ffffff;
   --surface-muted: #f2f0ea;
@@ -38,5 +50,69 @@
 body {
   background-color: var(--bg);
   color: var(--ink-900);
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-family: var(--font-ui);
+}
+
+/*
+ * shadcn/ui コンポーネント(手書き追加。design/handoffs/20260708-m1-mvp-screens.md の
+ * shadcn/ui コンポーネント対応表を参照)が参照する Tailwind テーマトークン。
+ * 上記デザイントークンへ写像する。shadcn の慣習的な "accent"(サブトルなホバー背景)は
+ * 既存の --accent(プライマリボタン等の強いブランドカラー)と意味が異なり名前も衝突するため、
+ * --accent-soft を充てる(--accent 自体の値・用途は変更しない)。
+ */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--ink-900);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--ink-900);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--ink-900);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--surface-muted);
+  --color-secondary-foreground: var(--ink-900);
+  --color-muted: var(--surface-muted);
+  --color-muted-foreground: var(--ink-600);
+  --color-accent: var(--accent-soft);
+  --color-accent-foreground: var(--ink-900);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border);
+  --color-input: var(--border-strong);
+  --color-ring: var(--accent);
+  --font-sans: var(--font-ui);
+
+  /* デザイントークンをそのまま Tailwind ユーティリティ化(bg-surface, text-ink-700 等) */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-muted-2: var(--surface-muted-2);
+  --color-border-strong: var(--border-strong);
+  --color-ink-900: var(--ink-900);
+  --color-ink-700: var(--ink-700);
+  --color-ink-600: var(--ink-600);
+  --color-ink-400: var(--ink-400);
+  --color-ink-300: var(--ink-300);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-border: var(--accent-soft-border);
+  --color-gold: var(--gold);
+  --color-gold-ink: var(--gold-ink);
+  --color-gold-soft: var(--gold-soft);
+  --color-gold-soft-border: var(--gold-soft-border);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-soft-border: var(--danger-soft-border);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+}
+
+.font-reading {
+  font-family: var(--font-reading);
 }

@@ -1,5 +1,5 @@
 import { initClient, initContract, tsRestFetchApi, type ApiFetcher } from "@ts-rest/core";
-import { authContract, healthContract } from "@secondbrain/shared";
+import { authContract, healthContract, notesContract } from "@secondbrain/shared";
 import { useAuthStore } from "../store/useAuthStore";
 
 const c = initContract();
@@ -7,6 +7,7 @@ const c = initContract();
 const appContract = c.router({
   ...healthContract,
   auth: authContract,
+  notes: notesContract,
 });
 
 // 401 応答を受けたら保存済みトークンを破棄する(期限切れ・改ざん・JWT_SECRET 変更時の共通処理)
