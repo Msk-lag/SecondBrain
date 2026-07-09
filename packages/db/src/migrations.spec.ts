@@ -41,3 +41,48 @@ describe("users テーブルのマイグレーション SQL", () => {
     expect(sql).toMatch(/`updated_at` timestamp NOT NULL DEFAULT/i);
   });
 });
+
+describe("notes テーブルのマイグレーション SQL", () => {
+  const sql = readAllMigrationSql();
+
+  it("notes テーブルを作成している", () => {
+    expect(sql).toMatch(/CREATE TABLE `notes`/i);
+  });
+
+  it("id が varchar(36) の主キーである", () => {
+    expect(sql).toMatch(/`id` varchar\(36\) NOT NULL/i);
+    expect(sql).toMatch(/CONSTRAINT `notes_id` PRIMARY KEY\(`id`\)/i);
+  });
+
+  it("user_id が NOT NULL かつ users への外部キーである", () => {
+    expect(sql).toMatch(/`user_id` varchar\(36\) NOT NULL/i);
+    expect(sql).toMatch(
+      /ALTER TABLE `notes` ADD CONSTRAINT `notes_user_id_users_id_fk` FOREIGN KEY \(`user_id`\) REFERENCES `users`\(`id`\)/i,
+    );
+  });
+
+  it("type が memo/url/screenshot の enum で default memo である", () => {
+    expect(sql).toMatch(/`type` enum\('memo','url','screenshot'\) NOT NULL DEFAULT 'memo'/i);
+  });
+
+  it("body が NOT NULL、title/summary は nullable である", () => {
+    expect(sql).toMatch(/`body` text NOT NULL/i);
+    expect(sql).toMatch(/`title` varchar\(255\),/i);
+    expect(sql).toMatch(/`summary` text,/i);
+  });
+
+  it("tags が NOT NULL の json カラムである", () => {
+    expect(sql).toMatch(/`tags` json NOT NULL/i);
+  });
+
+  it("created_at / updated_at がデフォルト付き NOT NULL である", () => {
+    expect(sql).toMatch(/`created_at` timestamp NOT NULL DEFAULT/i);
+    expect(sql).toMatch(/`updated_at` timestamp NOT NULL DEFAULT/i);
+  });
+
+  it("カーソルページネーション用の複合インデックスを持つ", () => {
+    expect(sql).toMatch(
+      /CREATE INDEX `notes_user_id_created_at_id_idx` ON `notes` \(`user_id`,`created_at`,`id`\)/i,
+    );
+  });
+});
