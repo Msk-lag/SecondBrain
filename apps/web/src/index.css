@@ -116,3 +116,37 @@ body {
 .font-reading {
   font-family: var(--font-reading);
 }
+
+/*
+ * 不定プログレスバー(design/handoffs/20260708-m1-mvp-screens.md 画面3b・「不定プログレスバー」
+ * shadcn/ui コンポーネント対応表 参照。shadcn Progress は確定値用のため custom CSS で再現する)。
+ * ProcessingStatusPanel・NoteDetailPage の処理中表示で使用する。
+ */
+.progress-indeterminate {
+  position: relative;
+  height: 4px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-muted-2);
+}
+
+.progress-indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  width: 40%;
+  border-radius: var(--radius-sm);
+  background-color: var(--accent);
+  animation: progress-indeterminate-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}

@@ -15,6 +15,20 @@
       "when": 1783569356472,
       "tag": "0001_redundant_trauma",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1783737603780,
+      "tag": "0002_naive_doctor_doom",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1783737637030,
+      "tag": "0003_shiny_blob",
+      "breakpoints": true
     }
   ]
 }

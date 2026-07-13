@@ -21,7 +21,7 @@
     "noImplicitAny": false,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals", "multer"]
   },
   "include": ["src"]
 }

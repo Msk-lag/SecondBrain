@@ -9,10 +9,44 @@ import { join } from "node:path";
  */
 const migrationsDir = fileURLToPath(new URL("../migrations/", import.meta.url));
 
+function listMigrationFiles(): string[] {
+  return readdirSync(migrationsDir)
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+}
+
 function readAllMigrationSql(): string {
-  const files = readdirSync(migrationsDir).filter((file) => file.endsWith(".sql"));
+  const files = listMigrationFiles();
   expect(files.length).toBeGreaterThan(0);
   return files.map((file) => readFileSync(join(migrationsDir, file), "utf8")).join("\n");
+}
+
+function readMigrationFile(file: string): string {
+  return readFileSync(join(migrationsDir, file), "utf8");
+}
+
+/**
+ * concepts 列の追加(nullable)を含むマイグレーションファイル名を探す
+ * (§ concepts 列の NOT NULL 化(既存行の移行手順) の1段階目)。
+ */
+function findConceptsAddMigrationFile(): string {
+  const files = listMigrationFiles();
+  const found = files.find((file) => /ADD `concepts`/i.test(readMigrationFile(file)));
+  expect(found).toBeDefined();
+  return found as string;
+}
+
+/**
+ * concepts 列を NOT NULL化する MODIFY COLUMN を含むマイグレーションファイル名を探す
+ * (§ concepts 列の NOT NULL 化(既存行の移行手順) の2段階目)。
+ */
+function findConceptsNotNullMigrationFile(): string {
+  const files = listMigrationFiles();
+  const found = files.find((file) =>
+    /MODIFY COLUMN `concepts` json NOT NULL/i.test(readMigrationFile(file)),
+  );
+  expect(found).toBeDefined();
+  return found as string;
 }
 
 describe("users テーブルのマイグレーション SQL", () => {
@@ -65,10 +99,17 @@ describe("notes テーブルのマイグレーション SQL", () => {
     expect(sql).toMatch(/`type` enum\('memo','url','screenshot'\) NOT NULL DEFAULT 'memo'/i);
   });
 
-  it("body が NOT NULL、title/summary は nullable である", () => {
-    expect(sql).toMatch(/`body` text NOT NULL/i);
+  it("title/summary は nullable である", () => {
     expect(sql).toMatch(/`title` varchar\(255\),/i);
     expect(sql).toMatch(/`summary` text,/i);
+  });
+
+  it("body は当初 NOT NULL で作成され、0002 で nullable 化される(screenshot ノートは body: null)", () => {
+    // 0001(初期作成)時点では NOT NULL
+    expect(sql).toMatch(/`body` text NOT NULL/i);
+    // 後続マイグレーションで NOT NULL を外す MODIFY COLUMN が存在する
+    // (§ notes テーブル拡張・削除の論理削除化 参照。screenshot ノートは body: null で作成する)
+    expect(sql).toMatch(/ALTER TABLE `notes` MODIFY COLUMN `body` text;/i);
   });
 
   it("tags が NOT NULL の json カラムである", () => {
@@ -84,5 +125,63 @@ describe("notes テーブルのマイグレーション SQL", () => {
     expect(sql).toMatch(
       /CREATE INDEX `notes_user_id_created_at_id_idx` ON `notes` \(`user_id`,`created_at`,`id`\)/i,
     );
+  });
+});
+
+describe("notes テーブル拡張(M1-3 スクショ AI 解析)のマイグレーション SQL", () => {
+  const sql = readAllMigrationSql();
+
+  it("status が pending/processing/completed/failed の enum で default completed である", () => {
+    expect(sql).toMatch(
+      /ADD `status` enum\('pending','processing','completed','failed'\).*DEFAULT 'completed'.*NOT NULL/i,
+    );
+  });
+
+  it("failure_reason が nullable な varchar(500) である", () => {
+    expect(sql).toMatch(/ADD `failure_reason` varchar\(500\);/i);
+  });
+
+  it("image_key が nullable な varchar(512) である", () => {
+    expect(sql).toMatch(/ADD `image_key` varchar\(512\);/i);
+  });
+
+  it("image_mime_type が nullable な varchar(100) である", () => {
+    expect(sql).toMatch(/ADD `image_mime_type` varchar\(100\);/i);
+  });
+
+  it("extracted_text が nullable な text である", () => {
+    expect(sql).toMatch(/ADD `extracted_text` text;/i);
+  });
+
+  it("deleted_at が nullable な timestamp である", () => {
+    expect(sql).toMatch(/ADD `deleted_at` timestamp;/i);
+  });
+
+  it("processing_generation が NOT NULL の int で default 0 である", () => {
+    expect(sql).toMatch(/ADD `processing_generation` int.*DEFAULT 0.*NOT NULL/i);
+  });
+
+  it("processing_attempt_token が nullable な varchar(36) である", () => {
+    expect(sql).toMatch(/ADD `processing_attempt_token` varchar\(36\);/i);
+  });
+
+  it("deleted_at・status の単独インデックスを持つ(物理削除・stuck 再投入バッチのスキャン用)", () => {
+    expect(sql).toMatch(/CREATE INDEX `notes_deleted_at_idx` ON `notes` \(`deleted_at`\)/i);
+    expect(sql).toMatch(/CREATE INDEX `notes_status_idx` ON `notes` \(`status`\)/i);
+  });
+});
+
+describe("concepts 列の2段階 NOT NULL 化(既存行の移行手順。§ concepts 列の NOT NULL 化 参照)", () => {
+  it("1段階目: concepts を nullable な json 列として追加し、既存行を '[]' で backfill する", () => {
+    const addFile = findConceptsAddMigrationFile();
+    const addSql = readMigrationFile(addFile);
+    expect(addSql).toMatch(/ADD `concepts` json;/i);
+    expect(addSql).toMatch(/UPDATE `notes` SET `concepts` = '\[\]' WHERE `concepts` IS NULL;/i);
+  });
+
+  it("2段階目: concepts を NOT NULL 化する MODIFY COLUMN が、1段階目より後のマイグレーションに存在する", () => {
+    const addFile = findConceptsAddMigrationFile();
+    const notNullFile = findConceptsNotNullMigrationFile();
+    expect(notNullFile.localeCompare(addFile)).toBeGreaterThan(0);
   });
 });
