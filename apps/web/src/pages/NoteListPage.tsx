@@ -1,10 +1,13 @@
-import { Trash2 } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import { Link } from "react-router";
+import { toast } from "sonner";
+import type { Note } from "@secondbrain/shared";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
-import { useNotesQuery } from "@/features/notes/api";
+import { NoteStatusBadge } from "@/components/NoteStatusBadge";
+import { useNotesQuery, useRetryNoteMutation } from "@/features/notes/api";
 import { getDisplayTitle } from "@/features/notes/utils";
 
 function formatSavedAt(iso: string): string {
@@ -13,6 +16,63 @@ function formatSavedAt(iso: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+function NoteListItem({ note }: Readonly<{ note: Note }>) {
+  const retryNote = useRetryNoteMutation(note.id);
+  const isProcessing = note.status === "pending" || note.status === "processing";
+  const isFailed = note.status === "failed";
+
+  return (
+    <li className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3">
+      <div className="min-w-0 flex-1">
+        {isProcessing && (
+          <div className="flex items-center gap-2">
+            <Loader2 className="size-4 shrink-0 animate-spin text-ink-600" aria-hidden="true" />
+            <Skeleton className="h-4 w-40" />
+            <NoteStatusBadge status={note.status} />
+          </div>
+        )}
+
+        {isFailed && (
+          <div className="flex flex-wrap items-center gap-2">
+            <NoteStatusBadge status={note.status} />
+            <p className="text-xs text-danger">
+              処理に失敗しました。アーカイブ自体は保存済みです。
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                retryNote.mutate(undefined, {
+                  onError: (error) => toast.error(error.message),
+                })
+              }
+              disabled={retryNote.isPending}
+            >
+              {retryNote.isPending ? "再実行中…" : "再実行する"}
+            </Button>
+          </div>
+        )}
+
+        {!isProcessing && !isFailed && (
+          <Link to={`/notes/${note.id}`} className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-ink-900">{getDisplayTitle(note)}</p>
+            <p className="mt-0.5 text-xs text-ink-600">{formatSavedAt(note.createdAt)}</p>
+          </Link>
+        )}
+      </div>
+      <ConfirmDeleteDialog
+        noteId={note.id}
+        trigger={
+          <Button variant="ghost" size="icon" aria-label="削除">
+            <Trash2 className="size-4" />
+          </Button>
+        }
+      />
+    </li>
+  );
 }
 
 export function NoteListPage() {
@@ -65,23 +125,7 @@ export function NoteListPage() {
       ) : (
         <ul className="flex flex-col gap-2">
           {notes.map((note) => (
-            <li
-              key={note.id}
-              className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3"
-            >
-              <Link to={`/notes/${note.id}`} className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-ink-900">{getDisplayTitle(note)}</p>
-                <p className="mt-0.5 text-xs text-ink-600">{formatSavedAt(note.createdAt)}</p>
-              </Link>
-              <ConfirmDeleteDialog
-                noteId={note.id}
-                trigger={
-                  <Button variant="ghost" size="icon" aria-label="削除">
-                    <Trash2 className="size-4" />
-                  </Button>
-                }
-              />
-            </li>
+            <NoteListItem key={note.id} note={note} />
           ))}
         </ul>
       )}

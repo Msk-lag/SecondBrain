@@ -49,12 +49,35 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
       MINIO_BUCKET: ${MINIO_BUCKET:?set MINIO_BUCKET in .env}
+      MINIO_APP_ACCESS_KEY: ${MINIO_APP_ACCESS_KEY:?set MINIO_APP_ACCESS_KEY in .env}
+      MINIO_APP_SECRET_KEY: ${MINIO_APP_SECRET_KEY:?set MINIO_APP_SECRET_KEY in .env}
+    volumes:
+      - ./scripts:/scripts:ro
     entrypoint:
       - /bin/sh
       - -c
       - |
-        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done
+        # `MC_HOST_<alias>` 環境変数方式は資格情報のURLエンコードが必要になり、r6([B-1]・[E-2]:
+        # 未エンコードによる実害)・r7([B-2]:過剰な事前検証による有効な資格情報の拒否)と
+        # 2ラウンド連続で問題が発生したため `mc alias set` へ差し戻す
+        # (Codex コードレビュー r7 指摘 [B-2] への対応。scripts/minio-app-policy.sh 冒頭のコメント参照)。
+        # `until ...; do sleep 1; done` は MinIO 起動待ちだけでなく認証失敗等の恒久的なエラーでも
+        # 無期限に再試行してしまう(Codex コードレビュー r7 指摘 [B-1] への対応)。試行回数の
+        # 上限を設け、上限到達時は最後のエラーを出力して非ゼロ終了する。
+        MC_ALIAS_SET_MAX_ATTEMPTS=30
+        i=0
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" 2>/tmp/mc-alias-set-error; do
+          i=$$((i + 1))
+          if [ "$$i" -ge "$$MC_ALIAS_SET_MAX_ATTEMPTS" ]; then
+            echo "mc alias set failed after $$MC_ALIAS_SET_MAX_ATTEMPTS attempts:" >&2
+            cat /tmp/mc-alias-set-error >&2
+            exit 1
+          fi
+          sleep 1
+        done
         mc mb --ignore-existing "local/$$MINIO_BUCKET"
+        MC_ROOT_USER="$$MINIO_ROOT_USER" MC_ROOT_PASSWORD="$$MINIO_ROOT_PASSWORD" MC_APP_SECRET_KEY="$$MINIO_APP_SECRET_KEY" \
+          sh /scripts/minio-app-policy.sh http://minio:9000 local "$$MINIO_APP_ACCESS_KEY" "$$MINIO_BUCKET" secondbrain-app-policy
 
 volumes:
   mariadb_data:

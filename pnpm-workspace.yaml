@@ -4,3 +4,6 @@ packages:
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+  # apps/worker の画像リサイズ(sharp)がプラットフォーム別バイナリを取得するために必要
+  # (§ Claude 入力画像のリサイズ・再圧縮 参照)。
+  sharp: true

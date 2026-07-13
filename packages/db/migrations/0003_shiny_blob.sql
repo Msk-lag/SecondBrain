@@ -1,0 +1,1 @@
+ALTER TABLE `notes` MODIFY COLUMN `concepts` json NOT NULL;
