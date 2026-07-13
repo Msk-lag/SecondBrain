@@ -96,7 +96,9 @@ function expectListObjectsAccessDenied(client: MinioSdkClient, bucket: string): 
  * パースする(実行時テストとの二重保証)。
  */
 function extractGeneratedPolicyActions(): string[] {
-  const scriptPath = fileURLToPath(new URL("../../../scripts/minio-app-policy.sh", import.meta.url));
+  const scriptPath = fileURLToPath(
+    new URL("../../../scripts/minio-app-policy.sh", import.meta.url),
+  );
   const content = readFileSync(scriptPath, "utf8");
   const match = content.match(/cat > "\$POLICY_FILE" <<EOF\n([\s\S]*?)\nEOF/);
   if (!match) {

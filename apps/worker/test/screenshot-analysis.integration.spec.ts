@@ -52,7 +52,9 @@ function makeJob(
   return { data, opts: { attempts }, attemptsMade } as unknown as Job<ScreenshotAnalysisJobPayload>;
 }
 
-function sampleClaudeResult(overrides: Partial<ScreenshotAnalysisResult> = {}): ScreenshotAnalysisResult {
+function sampleClaudeResult(
+  overrides: Partial<ScreenshotAnalysisResult> = {},
+): ScreenshotAnalysisResult {
   return {
     title: "テストタイトル",
     summary: "テスト要約です。",
@@ -174,9 +176,7 @@ describe("screenshot-analysis 統合テスト(ジョブ処理ロジック)", () 
       const noteId = await insertScreenshotNote({ status: "pending", processingGeneration: 0 });
       claudeStub.analyze.mockResolvedValueOnce(sampleClaudeResult({ title: "成功タイトル" }));
 
-      await screenshotAnalysisProcessor.process(
-        makeJob({ noteId, generation: 0 }, 0, 3),
-      );
+      await screenshotAnalysisProcessor.process(makeJob({ noteId, generation: 0 }, 0, 3));
 
       const note = await fetchNote(noteId);
       expect(note?.status).toBe("completed");
@@ -350,7 +350,10 @@ describe("screenshot-analysis 統合テスト(ジョブ処理ロジック)", () 
     }
 
     it("10分以上更新されていない pending/processing ノートが対象になり、世代が進む", async () => {
-      const pendingNoteId = await insertScreenshotNote({ status: "pending", processingGeneration: 0 });
+      const pendingNoteId = await insertScreenshotNote({
+        status: "pending",
+        processingGeneration: 0,
+      });
       const processingNoteId = await insertScreenshotNote({
         status: "processing",
         processingGeneration: 0,

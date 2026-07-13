@@ -1,5 +1,10 @@
 import { Queue } from "bullmq";
-import { createPool, dbConnectionOptionsFromEnv, loadRootEnv, runMigrations } from "@secondbrain/db";
+import {
+  createPool,
+  dbConnectionOptionsFromEnv,
+  loadRootEnv,
+  runMigrations,
+} from "@secondbrain/db";
 // テストDBのDROP/RESETはroot資格情報を使う破壊的操作のため、パッケージのメイン
 // エントリーポイントではなくテスト専用サブパスから明示的に import する
 // (Codex コードレビュー r6 指摘 [D-3] への対応。packages/db/src/index.ts 参照)。
@@ -16,7 +21,11 @@ import {
   API_TEST_POLICY_NAME,
   API_TEST_REDIS_DB,
 } from "./integration-constants";
-import { createBucketIfMissing, removeBucketIfExists, runMinioAppPolicyScript } from "./minio-admin";
+import {
+  createBucketIfMissing,
+  removeBucketIfExists,
+  runMinioAppPolicyScript,
+} from "./minio-admin";
 
 // setupFiles はテスト対象ファイル(screenshots.e2e-spec.ts)より先に完全実行される(vitest の
 // 既定動作)。ここで同期的に .env を読み込むことで、後続のテストファイルが `AppModule` を静的
@@ -84,7 +93,10 @@ const ALLOWED_TEST_REDIS_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
  */
 async function flushRedisDb(): Promise<void> {
   const host = process.env.REDIS_HOST ?? "localhost";
-  if (!ALLOWED_TEST_REDIS_HOSTS.has(host) && process.env.ALLOW_INTEGRATION_TEST_REDIS_FLUSHDB !== "1") {
+  if (
+    !ALLOWED_TEST_REDIS_HOSTS.has(host) &&
+    process.env.ALLOW_INTEGRATION_TEST_REDIS_FLUSHDB !== "1"
+  ) {
     throw new Error(
       `refusing to FLUSHDB against REDIS_HOST='${host}': only ${[...ALLOWED_TEST_REDIS_HOSTS].join(", ")} ` +
         "are allowed by default. Set ALLOW_INTEGRATION_TEST_REDIS_FLUSHDB=1 to override for an " +
