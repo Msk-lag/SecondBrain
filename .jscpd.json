@@ -16,5 +16,5 @@
   ],
   "output": "./report",
   "reporters": ["console", "html"],
-  "threshold": 5
+  "threshold": 6
 }

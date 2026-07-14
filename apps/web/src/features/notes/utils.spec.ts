@@ -14,4 +14,8 @@ describe("getDisplayTitle", () => {
     const result = getDisplayTitle({ title: null, body });
     expect(result).toBe(`${"あ".repeat(30)}…`);
   });
+
+  it("title・body がともに null の場合は「無題」を返す(screenshot ノート未完了時)", () => {
+    expect(getDisplayTitle({ title: null, body: null })).toBe("無題");
+  });
 });

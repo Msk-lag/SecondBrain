@@ -1,4 +1,15 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["**/*.spec.ts", "vitest.config.ts", "src/seed.ts"]
+  "compilerOptions": {
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "exclude": [
+    "**/*.spec.ts",
+    "vitest.config.ts",
+    "vitest.integration.config.ts",
+    "src/seed.ts",
+    "test"
+  ]
 }

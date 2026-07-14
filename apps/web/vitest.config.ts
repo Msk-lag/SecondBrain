@@ -21,10 +21,10 @@ export default mergeConfig(
         ],
         // 後退禁止 floor(ADR-0003)。実測値を下回らない範囲でのみ更新可(引き上げは歓迎)。
         thresholds: {
-          statements: 81,
-          branches: 77,
-          functions: 75,
-          lines: 82,
+          statements: 84,
+          branches: 80,
+          functions: 79,
+          lines: 85,
         },
       },
     },

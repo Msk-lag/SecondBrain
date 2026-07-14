@@ -11,6 +11,7 @@
     "build": "pnpm -r --if-present run build",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test": "pnpm -r --if-present run test",
+    "test:integration": "pnpm --filter @secondbrain/db run test:integration && pnpm --filter api run test:integration && pnpm --filter worker run test:integration",
     "test:coverage": "pnpm -r --if-present run test:coverage",
     "lint": "pnpm -r --if-present run lint",
     "verify:fast": "pnpm typecheck && pnpm lint && pnpm test",
