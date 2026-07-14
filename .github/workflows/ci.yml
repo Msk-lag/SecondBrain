@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # feature ブランチは pull_request run のみで検査する(DOD-1 により最初の push 直後に
+    # Draft PR を必ず作成するため検査漏れは生じない)。同一コミットへの push/pull_request の
+    # 二重起動と、それに伴う紛らわしいキャンセル表示・CI 時間の浪費を避ける。
+    branches: ["main"]
   pull_request:
     branches: ["**"]
 
