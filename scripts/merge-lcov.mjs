@@ -75,6 +75,11 @@ function mergeLcovFiles(files) {
     const content = readFileSync(file, "utf8");
     const lines = content.split(/\r?\n/);
     for (const line of lines) {
+      // diff-cover の lcov パーサは空行を許容しない(ValueError: Unknown syntax)ため、
+      // ファイル末尾・ファイル間の空行は一切出力しない。
+      if (line.trim() === "") {
+        continue;
+      }
       if (line.startsWith("SF:")) {
         const original = line.slice(3);
         const normalized = normalizeSourcePath(original, packageDir);
@@ -84,15 +89,8 @@ function mergeLcovFiles(files) {
       }
     }
   }
-  // 末尾に余分な空行が増えすぎないよう、末尾の連続する空行を1つにまとめる。
-  while (
-    outputLines.length > 1 &&
-    outputLines[outputLines.length - 1] === "" &&
-    outputLines[outputLines.length - 2] === ""
-  ) {
-    outputLines.pop();
-  }
-  return outputLines.join("\n");
+  // 末尾は単一の改行で終端する(空行は含めない)。
+  return outputLines.join("\n") + "\n";
 }
 
 function main() {
