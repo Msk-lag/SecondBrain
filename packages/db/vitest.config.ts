@@ -9,5 +9,18 @@ export default defineConfig({
     // ファイル名が既定の `*.spec.ts` グロブに一致してしまうため、明示的に対象外にする
     // (`pnpm test` では実行しない。`pnpm test:integration` からのみ実行する)。
     include: ["src/**/*.spec.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov", "json"],
+      include: ["src/**/*.ts"],
+      exclude: ["src/**/*.spec.ts", "src/**/*.test.ts", "src/**/*.d.ts"],
+      // 後退禁止 floor(ADR-0003)。実測値を下回らない範囲でのみ更新可(引き上げは歓迎)。
+      thresholds: {
+        statements: 50,
+        branches: 46,
+        functions: 40,
+        lines: 50,
+      },
+    },
   },
 });

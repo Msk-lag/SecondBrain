@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # feature ブランチは pull_request run のみで検査する(DOD-1 により最初の push 直後に
+    # Draft PR を必ず作成するため検査漏れは生じない)。同一コミットへの push/pull_request の
+    # 二重起動と、それに伴う紛らわしいキャンセル表示・CI 時間の浪費を避ける。
+    branches: ["main"]
   pull_request:
     branches: ["**"]
 
@@ -61,3 +64,117 @@ jobs:
             -w /repo \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source . -v --config .gitleaks.toml
+
+  diff-coverage:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "diff-cover>=9,<10"
+
+      - run: pnpm build
+
+      - run: pnpm test:coverage
+
+      - run: git fetch origin ${{ github.base_ref }}
+
+      - run: bash scripts/check-diff-coverage.sh --compare origin/${{ github.base_ref }} --require
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MYSQL_ROOT_PASSWORD: ci_dummy_root_password
+          MYSQL_DATABASE: secondbrain_test
+          MYSQL_USER: secondbrain
+          MYSQL_PASSWORD: ci_dummy_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_dummy_root_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      # CI 専用のダミー認証情報(秘密情報ではない)。テストセットアップ専用の root 資格情報。
+      MARIADB_ROOT_PASSWORD: ci_dummy_root_password
+      MARIADB_HOST: 127.0.0.1
+      MARIADB_PORT: "3306"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # 当面は packages/db の統合テスト(migration 検証)のみを CI で実行する。
+      # apps/api・apps/worker の統合テストは MinIO/Redis service の追加が必要なため
+      # フォローアップ Issue で対応する(それまではローカル手動実行の規定を維持)。
+      - run: pnpm --filter @secondbrain/db run test:integration
+
+  gate:
+    runs-on: ubuntu-latest
+    needs: [quality, secret-scan, diff-coverage, integration]
+    if: always()
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          set -u
+          fail=0
+
+          check_required() {
+            local job="$1" result="$2"
+            if [ "$result" != "success" ]; then
+              echo "ERROR: required job '${job}' did not succeed (result=${result})"
+              fail=1
+            else
+              echo "OK: required job '${job}' succeeded"
+            fi
+          }
+
+          check_required "quality" "${{ needs.quality.result }}"
+          check_required "secret-scan" "${{ needs.secret-scan.result }}"
+          check_required "integration" "${{ needs.integration.result }}"
+
+          diff_coverage_result="${{ needs.diff-coverage.result }}"
+          event_name="${{ github.event_name }}"
+          if [ "$diff_coverage_result" = "success" ]; then
+            echo "OK: required job 'diff-coverage' succeeded"
+          elif [ "$diff_coverage_result" = "skipped" ] && [ "$event_name" != "pull_request" ]; then
+            echo "OK: 'diff-coverage' skipped (not a pull_request event)"
+          else
+            echo "ERROR: required job 'diff-coverage' did not succeed (result=${diff_coverage_result}, event=${event_name})"
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "gate: one or more required jobs failed."
+            exit 1
+          fi
+
+          echo "gate: all required jobs succeeded."
