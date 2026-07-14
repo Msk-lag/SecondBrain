@@ -61,3 +61,113 @@ jobs:
             -w /repo \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source . -v --config .gitleaks.toml
+
+  diff-coverage:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "diff-cover>=9,<10"
+
+      - run: pnpm test:coverage
+
+      - run: git fetch origin ${{ github.base_ref }}
+
+      - run: bash scripts/check-diff-coverage.sh --compare origin/${{ github.base_ref }} --require
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MYSQL_ROOT_PASSWORD: ci_dummy_root_password
+          MYSQL_DATABASE: secondbrain_test
+          MYSQL_USER: secondbrain
+          MYSQL_PASSWORD: ci_dummy_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_dummy_root_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      # CI 専用のダミー認証情報(秘密情報ではない)。接続文字列はリテラルで置かず実行時に合成する。
+      DB_USER: secondbrain
+      DB_PASSWORD: ci_dummy_password
+      DB_NAME: secondbrain_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Compose DATABASE_URL from dummy CI credentials
+        run: printf 'DATABASE_URL=%s://%s:%s@127.0.0.1:3306/%s\n' mysql "$DB_USER" "$DB_PASSWORD" "$DB_NAME" >> "$GITHUB_ENV"
+
+      - run: pnpm -r --if-present run test:integration
+
+  gate:
+    runs-on: ubuntu-latest
+    needs: [quality, secret-scan, diff-coverage, integration]
+    if: always()
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          set -u
+          fail=0
+
+          check_required() {
+            local job="$1" result="$2"
+            if [ "$result" != "success" ]; then
+              echo "ERROR: required job '${job}' did not succeed (result=${result})"
+              fail=1
+            else
+              echo "OK: required job '${job}' succeeded"
+            fi
+          }
+
+          check_required "quality" "${{ needs.quality.result }}"
+          check_required "secret-scan" "${{ needs.secret-scan.result }}"
+          check_required "integration" "${{ needs.integration.result }}"
+
+          diff_coverage_result="${{ needs.diff-coverage.result }}"
+          event_name="${{ github.event_name }}"
+          if [ "$diff_coverage_result" = "success" ]; then
+            echo "OK: required job 'diff-coverage' succeeded"
+          elif [ "$diff_coverage_result" = "skipped" ] && [ "$event_name" != "pull_request" ]; then
+            echo "OK: 'diff-coverage' skipped (not a pull_request event)"
+          else
+            echo "ERROR: required job 'diff-coverage' did not succeed (result=${diff_coverage_result}, event=${event_name})"
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "gate: one or more required jobs failed."
+            exit 1
+          fi
+
+          echo "gate: all required jobs succeeded."

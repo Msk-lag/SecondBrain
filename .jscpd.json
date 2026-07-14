@@ -1,7 +1,20 @@
 {
-  "path": ["apps/web/src", "apps/api/src", "apps/worker/src", "packages/shared/src"],
-  "ignore": ["**/node_modules/**", "**/dist/**", "**/*.spec.ts", "**/*.spec.tsx"],
+  "path": [
+    "apps/web/src",
+    "apps/api/src",
+    "apps/worker/src",
+    "packages/shared/src",
+    "packages/db/src"
+  ],
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/__fixtures__/**",
+    "**/*.generated.*"
+  ],
   "output": "./report",
   "reporters": ["console", "html"],
-  "threshold": 100
+  "threshold": 5
 }
