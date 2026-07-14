@@ -85,6 +85,8 @@ jobs:
 
       - run: pip install "diff-cover>=9,<10"
 
+      - run: pnpm build
+
       - run: pnpm test:coverage
 
       - run: git fetch origin ${{ github.base_ref }}
@@ -109,10 +111,10 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     env:
-      # CI 専用のダミー認証情報(秘密情報ではない)。接続文字列はリテラルで置かず実行時に合成する。
-      DB_USER: secondbrain
-      DB_PASSWORD: ci_dummy_password
-      DB_NAME: secondbrain_test
+      # CI 専用のダミー認証情報(秘密情報ではない)。テストセットアップ専用の root 資格情報。
+      MARIADB_ROOT_PASSWORD: ci_dummy_root_password
+      MARIADB_HOST: 127.0.0.1
+      MARIADB_PORT: "3306"
     steps:
       - uses: actions/checkout@v4
 
@@ -125,10 +127,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Compose DATABASE_URL from dummy CI credentials
-        run: printf 'DATABASE_URL=%s://%s:%s@127.0.0.1:3306/%s\n' mysql "$DB_USER" "$DB_PASSWORD" "$DB_NAME" >> "$GITHUB_ENV"
+      - run: pnpm build
 
-      - run: pnpm -r --if-present run test:integration
+      # 当面は packages/db の統合テスト(migration 検証)のみを CI で実行する。
+      # apps/api・apps/worker の統合テストは MinIO/Redis service の追加が必要なため
+      # フォローアップ Issue で対応する(それまではローカル手動実行の規定を維持)。
+      - run: pnpm --filter @secondbrain/db run test:integration
 
   gate:
     runs-on: ubuntu-latest
