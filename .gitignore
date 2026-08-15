@@ -61,3 +61,6 @@ report/
 /docs/setup-claude-design.md
 /docs/adr/0001-codex-review-open-items.md
 /docs/adr/0002-autonomous-mode.md
+/.agents/
+/.codex/
+/docs/harness-template-knowledge.md
