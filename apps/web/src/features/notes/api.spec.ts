@@ -8,6 +8,7 @@ import {
   useNoteImage,
   useNoteQuery,
   useNotesQuery,
+  useRelatedNotesQuery,
   useRetryNoteMutation,
   useUpdateNoteMutation,
 } from "./api";
@@ -23,6 +24,7 @@ vi.mock("@/lib/api-client", () => ({
       update: vi.fn(),
       delete: vi.fn(),
       retry: vi.fn(),
+      related: vi.fn(),
     },
   },
 }));
@@ -88,6 +90,127 @@ describe("useNoteQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBeNull();
+  });
+});
+
+describe("useRelatedNotesQuery", () => {
+  // 「取得しない」ことの検証は呼び出し履歴に依存するため、前のテストの履歴を持ち越さない
+  beforeEach(() => {
+    vi.mocked(apiClient.notes.related).mockClear();
+  });
+
+  it("類似ノートの一覧を返す", async () => {
+    const similar = [
+      { id: "note-2", title: "関連メモ", type: "memo" as const, excerpt: "抜粋", distance: 0.1 },
+    ];
+    vi.mocked(apiClient.notes.related).mockResolvedValue({
+      status: 200,
+      body: { status: "ready", similar },
+      headers: new Headers(),
+    });
+
+    const { result } = renderHook(() => useRelatedNotesQuery("note-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.similar).toEqual(similar);
+    expect(result.current.data?.status).toBe("ready");
+  });
+
+  it("200以外の応答はエラーを投げる", async () => {
+    vi.mocked(apiClient.notes.related).mockResolvedValue({
+      status: 404,
+      body: { message: "not found" },
+      headers: new Headers(),
+    });
+
+    const { result } = renderHook(() => useRelatedNotesQuery("note-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  it("noteId が空のときは取得しない", () => {
+    const { result } = renderHook(() => useRelatedNotesQuery(""), {
+      wrapper: createWrapper(),
+    });
+
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(apiClient.notes.related).not.toHaveBeenCalled();
+  });
+
+  // レスポンス自身の status を停止条件にした条件付きポーリング(Fable 5 + Codex 独立議論
+  // 論点2 で確定)。generating の間だけポーリングし、ready に遷移した時点で必ず停止する
+  // (§ 実装手順・NoteEditPage.spec.tsx の processing→completed ポーリングテストと同じ方式)。
+  it("generating の間はポーリングし、ready に遷移すると停止する", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const similar = [
+        { id: "note-2", title: "関連メモ", type: "memo" as const, excerpt: "抜粋", distance: 0.1 },
+      ];
+      vi.mocked(apiClient.notes.related)
+        .mockResolvedValueOnce({
+          status: 200,
+          body: { status: "generating", similar: [] },
+          headers: new Headers(),
+        })
+        .mockResolvedValue({
+          status: 200,
+          body: { status: "ready", similar },
+          headers: new Headers(),
+        });
+
+      const { result } = renderHook(() => useRelatedNotesQuery("note-1"), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => expect(result.current.data?.status).toBe("generating"));
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await waitFor(() => expect(result.current.data?.status).toBe("ready"));
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
+
+      // ready に遷移した後は、間隔を経過させても再取得されない(ポーリング停止)。
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("failed に遷移した場合もポーリングを停止する", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(apiClient.notes.related)
+        .mockResolvedValueOnce({
+          status: 200,
+          body: { status: "generating", similar: [] },
+          headers: new Headers(),
+        })
+        .mockResolvedValue({
+          status: 200,
+          body: { status: "failed", similar: [] },
+          headers: new Headers(),
+        });
+
+      const { result } = renderHook(() => useRelatedNotesQuery("note-1"), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => expect(result.current.data?.status).toBe("generating"));
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await waitFor(() => expect(result.current.data?.status).toBe("failed"));
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

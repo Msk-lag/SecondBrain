@@ -75,6 +75,12 @@ describe("screenshot-analysis 統合テスト(ジョブ処理ロジック)", () 
   let noteStuckRequeueProcessor: NoteStuckRequeueProcessor;
   let notePurgeProcessor: NotePurgeProcessor;
   let screenshotQueue: Queue;
+  // `Queue.pause()` は Redis 上にキューの停止状態を永続化するため、テスト終了時に必ず
+  // `resume()` で復帰させる必要がある(note-enrichment.integration.spec.ts と同じ問題・
+  // 同じ修正。Codex 再レビュー HIGH 指摘対応)。セットアップ途中で `pause()` 自体が失敗した
+  // 場合は resume を呼ばない(そもそも停止していないため)よう、実際に pause が成功した
+  // 場合のみこのフラグを立てる。
+  let screenshotQueuePaused = false;
 
   beforeAll(async () => {
     claudeStub = { analyze: vi.fn() };
@@ -108,6 +114,7 @@ describe("screenshot-analysis 統合テスト(ジョブ処理ロジック)", () 
     // worker が処理してしまい、アサーション対象のノートが意図せず processing に遷移する)。
     // Queue.pause() はキュー自体を待機列から外す(より強い)停止であり、この競合を構造的に防ぐ。
     await screenshotQueue.pause();
+    screenshotQueuePaused = true;
 
     ownerId = randomUUID();
     await db.insert(users).values({
@@ -118,7 +125,30 @@ describe("screenshot-analysis 統合テスト(ジョブ処理ロジック)", () 
   }, 60_000);
 
   afterAll(async () => {
-    await app.close();
+    // `screenshotQueue.pause()` は Redis 上に停止状態を永続化するため、`app.close()` の前に
+    // 必ず `resume()` で復帰させる(同じ Redis を共有する後続テスト・プロセスがジョブを
+    // 処理できなくなるのを防ぐ。Codex 再レビュー HIGH 指摘対応)。`resume()` 自体が失敗しても
+    // `app.close()` は必ず実行する(try/finally)。
+    //
+    // 加えて、stuck 再投入バッチ・二重投入防止のテストがキューに残した待機/遅延ジョブを、
+    // `resume()` の前に必ず取り除く(note-enrichment.integration.spec.ts と同じ問題・同じ
+    // 修正。Codex 再レビュー HIGH 指摘対応: 前回修正で「停止したまま放置」は直ったが、
+    // 「ジョブを残したまま再開」という新たな問題が生じていた)。`drain(true)` は
+    // wait/paused/delayed のジョブのみを一括削除する(active/completed/failed には影響しない)。
+    // 本テストは `beforeAll` で Worker・Queue の双方を一時停止しているため active なジョブは
+    // 存在せず、対象キュー全体を空にしても安全である。`drain()` 自体が失敗しても
+    // `resume()`・`app.close()` は必ず実行する(入れ子の try/finally)。
+    try {
+      if (screenshotQueuePaused) {
+        try {
+          await screenshotQueue.drain(true);
+        } finally {
+          await screenshotQueue.resume();
+        }
+      }
+    } finally {
+      await app.close();
+    }
   });
 
   beforeEach(() => {
@@ -167,7 +197,22 @@ describe("screenshot-analysis 統合テスト(ジョブ処理ロジック)", () 
   }
 
   async function fetchNote(id: string) {
-    const rows = await db.select().from(notes).where(eq(notes.id, id)).limit(1);
+    // embedding 列(raw VECTOR バイナリ、M1-4a で追加)は customType 上 data/driverData が
+    // `never` でクエリビルダ経由の読み書きができないだけでなく、全列選択(`select()`)自体が
+    // 誤って生の VECTOR バイナリを結果へ混入させないよう、このテストで実際に参照する列のみを
+    // 明示的に投影する(D0 指摘[4]の回帰観点。§ notes 参照クエリの列投影監査 参照)。
+    const rows = await db
+      .select({
+        id: notes.id,
+        status: notes.status,
+        title: notes.title,
+        failureReason: notes.failureReason,
+        processingGeneration: notes.processingGeneration,
+        processingAttemptToken: notes.processingAttemptToken,
+      })
+      .from(notes)
+      .where(eq(notes.id, id))
+      .limit(1);
     return rows[0] ?? null;
   }
 

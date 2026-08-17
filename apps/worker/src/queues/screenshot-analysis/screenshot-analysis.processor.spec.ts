@@ -1,7 +1,13 @@
 import { Readable } from "node:stream";
-import type { Job } from "bullmq";
+import type { Job, Queue } from "bullmq";
 import type { Database } from "@secondbrain/db";
-import type { ScreenshotAnalysisJobPayload, ScreenshotAnalysisResult } from "@secondbrain/shared";
+import {
+  noteEnrichmentJobId,
+  NOTE_ENRICHMENT_JOB_OPTIONS,
+  NOTE_ENRICHMENT_QUEUE_NAME,
+  type ScreenshotAnalysisJobPayload,
+  type ScreenshotAnalysisResult,
+} from "@secondbrain/shared";
 import type { MinioClient } from "@secondbrain/storage";
 import type { ClaudeVisionClient } from "./claude-vision.client";
 import * as resizeForClaudeModule from "./resize-for-claude";
@@ -109,12 +115,30 @@ function createFakeClaudeClient(
 const validInputRow = [{ imageKey: "screenshots/user-1/note-1.png", imageMimeType: "image/png" }];
 const notDeletedRow = [{ deletedAt: null }];
 
+interface FakeEnrichmentQueue {
+  enrichmentQueue: Queue;
+  add: ReturnType<typeof vi.fn>;
+}
+
+/**
+ * note-enrichment キューへの enqueue(§ 実装手順4 参照。ScreenshotAnalysisProcessor が
+ * completeAnalysis 成功直後に enqueueNoteEnrichment 経由で呼ぶ)を検証するためのフェイク。
+ */
+function createFakeEnrichmentQueue(addImpl?: ReturnType<typeof vi.fn>): FakeEnrichmentQueue {
+  const add = addImpl ?? vi.fn().mockResolvedValue(undefined);
+  return { enrichmentQueue: { add } as unknown as Queue, add };
+}
+
+let enrichmentQueue: Queue;
+let enrichmentAdd: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
   vi.mocked(resizeForClaudeModule.resizeForClaude).mockReset();
   vi.mocked(resizeForClaudeModule.resizeForClaude).mockResolvedValue({
     buffer: Buffer.from("resized"),
     mediaType: "image/jpeg",
   });
+  ({ enrichmentQueue, add: enrichmentAdd } = createFakeEnrichmentQueue());
 });
 
 describe("ScreenshotAnalysisProcessor.process", () => {
@@ -123,16 +147,17 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     const db = createFakeDb({ updateQueue: [{ affectedRows: 0 }], updateSetSpy });
     const { storage, getObjectStream } = createFakeStorage();
     const { claudeClient, analyze } = createFakeClaudeClient();
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await processor.process(createFakeJob({}));
 
     expect(updateSetSpy).toHaveBeenCalledTimes(1);
     expect(getObjectStream).not.toHaveBeenCalled();
     expect(analyze).not.toHaveBeenCalled();
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
-  it("正常系: claim→取得→リサイズ→解析→completeAnalysis まで到達し status=completed で保存する", async () => {
+  it("正常系: claim→取得→リサイズ→解析→completeAnalysis まで到達し status=completed・enrichment_status=pending で保存し、note-enrichment を enqueue する", async () => {
     const updateSetSpy = vi.fn();
     const db = createFakeDb({
       selectQueue: [validInputRow, notDeletedRow],
@@ -141,15 +166,61 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient } = createFakeClaudeClient(VALID_RESULT);
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
+    const noteId = "note-1";
 
-    await processor.process(createFakeJob({}));
+    await processor.process(createFakeJob({ noteId }));
 
     expect(updateSetSpy).toHaveBeenCalledTimes(2);
     expect(updateSetSpy).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ status: "completed", title: VALID_RESULT.title }),
+      expect.objectContaining({
+        status: "completed",
+        title: VALID_RESULT.title,
+        enrichmentStatus: "pending",
+      }),
     );
+    expect(enrichmentAdd).toHaveBeenCalledTimes(1);
+    expect(enrichmentAdd).toHaveBeenCalledWith(
+      NOTE_ENRICHMENT_QUEUE_NAME,
+      { noteId },
+      { ...NOTE_ENRICHMENT_JOB_OPTIONS, jobId: noteEnrichmentJobId(noteId) },
+    );
+  });
+
+  it("completeAnalysis の CAS が不成立(affected rows 0。Claude 呼び出し中の論理削除や別試行による claim 更新等)の場合、note-enrichment を enqueue しない(Codex D0 レビュー HIGH 指摘への対応)", async () => {
+    const updateSetSpy = vi.fn();
+    const db = createFakeDb({
+      selectQueue: [validInputRow, notDeletedRow],
+      updateQueue: [{ affectedRows: 1 }, { affectedRows: 0 }],
+      updateSetSpy,
+    });
+    const { storage } = createFakeStorage();
+    const { claudeClient } = createFakeClaudeClient(VALID_RESULT);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
+
+    await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
+
+    expect(updateSetSpy).toHaveBeenCalledTimes(2);
+    expect(enrichmentAdd).not.toHaveBeenCalled();
+  });
+
+  it("enqueueNoteEnrichment(queue.add)が失敗しても completeAnalysis 自体は正常終了する(fail-closed。ログのみで握りつぶす)", async () => {
+    const updateSetSpy = vi.fn();
+    const db = createFakeDb({
+      selectQueue: [validInputRow, notDeletedRow],
+      updateQueue: [{ affectedRows: 1 }, { affectedRows: 1 }],
+      updateSetSpy,
+    });
+    const { storage } = createFakeStorage();
+    const { claudeClient } = createFakeClaudeClient(VALID_RESULT);
+    const failingAdd = vi.fn().mockRejectedValue(new Error("redis unreachable: secret"));
+    const { enrichmentQueue: failingQueue } = createFakeEnrichmentQueue(failingAdd);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, failingQueue);
+
+    await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
+
+    expect(failingAdd).toHaveBeenCalledTimes(1);
   });
 
   it("最終試行での失敗のみ failAnalysis を呼び status=failed にする(re-throw しない)", async () => {
@@ -161,7 +232,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient } = createFakeClaudeClient(new Error("claude api secret failure"));
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -172,6 +243,8 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     const [failCallArg] = updateSetSpy.mock.calls[1] as [{ failureReason: string }];
     expect(typeof failCallArg.failureReason).toBe("string");
     expect(failCallArg.failureReason).not.toContain("claude api secret failure");
+    // failAnalysis 経路(completeAnalysis に到達していない)では note-enrichment を enqueue しない。
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("途中の(最終試行ではない)失敗は failAnalysis を呼ばず re-throw する", async () => {
@@ -183,13 +256,14 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient } = createFakeClaudeClient(new Error("transient failure"));
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 0, attempts: 3 })),
     ).rejects.toThrow();
 
     expect(updateSetSpy).toHaveBeenCalledTimes(1);
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("re-throw される例外は固定分類名のみを持ち、元例外のメッセージ/スタックを含まない", async () => {
@@ -200,7 +274,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient } = createFakeClaudeClient(new Error(secret));
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     let caught: unknown;
     try {
@@ -224,7 +298,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient } = createFakeClaudeClient();
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     let caught: unknown;
     try {
@@ -238,6 +312,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     expect((caught as Error).message).not.toContain("secret-detail");
     // claim の1回のみ。failAnalysis 用の2回目の update は発生しない。
     expect(updateSetSpy).toHaveBeenCalledTimes(1);
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("画像処理完了後・Claude呼び出し直前に削除を検知した場合は正常終了し、messages.create 相当(analyze)は呼ばれない", async () => {
@@ -251,7 +326,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient, analyze } = createFakeClaudeClient();
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
 
@@ -260,6 +335,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     expect(analyze).not.toHaveBeenCalled();
     // claim の1回のみ。completeAnalysis/failAnalysis いずれの追加書き込みも発生しない。
     expect(updateSetSpy).toHaveBeenCalledTimes(1);
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("画像処理完了後・Claude呼び出し直前の再確認で別の試行が既にgeneration/tokenを更新していた(claim失効)場合も正常終了し、Claudeへ送信しない(Codex コードレビュー r8 指摘 [A-1])", async () => {
@@ -273,12 +349,13 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient, analyze } = createFakeClaudeClient();
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
 
     expect(analyze).not.toHaveBeenCalled();
     expect(updateSetSpy).toHaveBeenCalledTimes(1);
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("画像処理完了後・Claude呼び出し直前の再確認で行自体が既に物理削除(purge)されていた場合も正常終了し、Claudeへ送信しない(Codex コードレビュー r6 指摘 [A-2])", async () => {
@@ -291,13 +368,14 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient, analyze } = createFakeClaudeClient();
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
 
     expect(analyze).not.toHaveBeenCalled();
     // claim の1回のみ。completeAnalysis/failAnalysis いずれの追加書き込みも発生しない。
     expect(updateSetSpy).toHaveBeenCalledTimes(1);
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("loadProcessingInput の失敗は image_fetch_failed として分類され failureReason に反映される", async () => {
@@ -309,7 +387,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient } = createFakeClaudeClient();
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -317,6 +395,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
 
     const [failCallArg] = updateSetSpy.mock.calls[1] as [{ failureReason: string }];
     expect(failCallArg.failureReason).toBe("画像の取得に失敗しました。もう一度お試しください。");
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("MinIOから取得した画像ストリームが上限(20MB)を超える場合、image_fetch_failed として分類される(Codex コードレビュー r9 指摘 [A-3])", async () => {
@@ -329,7 +408,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     const oversizedBuffer = Buffer.alloc(21 * 1024 * 1024, 1);
     const { storage } = createFakeStorage(oversizedBuffer);
     const { claudeClient, analyze } = createFakeClaudeClient();
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -338,6 +417,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     expect(analyze).not.toHaveBeenCalled();
     const [failCallArg] = updateSetSpy.mock.calls[1] as [{ failureReason: string }];
     expect(failCallArg.failureReason).toBe("画像の取得に失敗しました。もう一度お試しください。");
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 
   it("failAnalysis 自身が例外を投げた場合も、元例外を含まないサニタイズ済みエラーを re-throw する(二重防御)", async () => {
@@ -347,7 +427,7 @@ describe("ScreenshotAnalysisProcessor.process", () => {
     });
     const { storage } = createFakeStorage();
     const { claudeClient } = createFakeClaudeClient(new Error("claude failure"));
-    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient);
+    const processor = new ScreenshotAnalysisProcessor(db, storage, claudeClient, enrichmentQueue);
 
     let caught: unknown;
     try {
@@ -358,5 +438,6 @@ describe("ScreenshotAnalysisProcessor.process", () => {
 
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).not.toContain("fail-analysis db secret");
+    expect(enrichmentAdd).not.toHaveBeenCalled();
   });
 });

@@ -76,6 +76,45 @@ export const screenshotAnalysisResultSchema = z.object({
 });
 export type ScreenshotAnalysisResult = z.infer<typeof screenshotAnalysisResultSchema>;
 
+/**
+ * `GET /notes/:id/related` のレスポンス項目(M1-4a §設計決定3 参照)。詳細画面の
+ * 「類似ノート」リスト表示に必要な最小フィールドのみを持つ。embedding 本体(VECTOR)は
+ * 絶対に含めない(D0 指摘[4]の回帰観点。生バイナリを公開レスポンスへ混入させない)。
+ */
+export const relatedNoteItemSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  type: noteTypeSchema,
+  // 一覧行に表示する抜粋。summary があればそれを、無ければ本文/抽出テキストの冒頭等
+  // API 側で決定した1本の文字列に正規化して返す(呼び出し側で summary/body/extractedText の
+  // 優先順位を判断させない)。
+  excerpt: z.string().nullable(),
+  // VEC_DISTANCE_COSINE の距離(0に近いほど類似)。
+  distance: z.number(),
+});
+export type RelatedNoteItem = z.infer<typeof relatedNoteItemSchema>;
+
+/**
+ * 類似候補ビュー(related)自体の可用性を表すアプリケーション概念(Fable 5 + Codex 独立議論
+ * 論点2 で確定。DB の `enrichment_status`(pending/completed/failed/NULL)をそのまま公開せず、
+ * このアプリケーション概念へ変換して返す。判定ロジックは apps/api 側
+ * `notes.service.ts` の `toRelatedStatus` 参照)。
+ *
+ * - "generating": 埋め込み未生成(生成中)。`similar` は常に空配列。クライアントはポーリングを
+ *   続けてよい。
+ * - "ready": 生成済み。`similar` が空配列でも「類似候補が無かった」ことを意味し、
+ *   ポーリングを止めてよい(空配列と「未生成」を区別できることが本フィールド導入の目的)。
+ * - "failed": 埋め込み生成が失敗した。`similar` には古い(生成成功時点の)候補が入り得る。
+ */
+export const relatedNotesStatusSchema = z.enum(["generating", "ready", "failed"]);
+export type RelatedNotesStatus = z.infer<typeof relatedNotesStatusSchema>;
+
+export const relatedNotesResponseSchema = z.object({
+  status: relatedNotesStatusSchema,
+  similar: z.array(relatedNoteItemSchema),
+});
+export type RelatedNotesResponse = z.infer<typeof relatedNotesResponseSchema>;
+
 export const notesContract = c.router({
   list: {
     method: "GET",
@@ -90,6 +129,19 @@ export const notesContract = c.router({
     path: "/notes/:id",
     responses: {
       200: noteSchema,
+      404: noteNotFoundSchema,
+    },
+  },
+  // 意味的に近い過去ノートの類似候補探索(M1-4a §設計決定3 参照)。距離昇順で最大5件。
+  // 404 方針は既存エンドポイントと同じく「対象が存在しない」「他ユーザー所有」を区別しない
+  // (§ API の 404 方針 参照)。レスポンスの `status`(relatedNotesStatusSchema 参照)は
+  // 「生成中で空配列」と「生成済みで類似なし」をクライアントが区別するためのフィールド
+  // (Fable 5 + Codex 独立議論 論点2 で確定)。
+  related: {
+    method: "GET",
+    path: "/notes/:id/related",
+    responses: {
+      200: relatedNotesResponseSchema,
       404: noteNotFoundSchema,
     },
   },

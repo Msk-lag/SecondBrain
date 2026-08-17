@@ -4,10 +4,16 @@ import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
-import { useNoteImage, useNoteQuery, useRetryNoteMutation } from "@/features/notes/api";
+import {
+  useNoteImage,
+  useNoteQuery,
+  useRelatedNotesQuery,
+  useRetryNoteMutation,
+} from "@/features/notes/api";
 import { getDisplayTitle } from "@/features/notes/utils";
 
 function formatSavedAt(iso: string): string {
@@ -53,6 +59,75 @@ function ScreenshotImage({
     );
   }
   return <Skeleton className="h-64 w-full" aria-busy={isLoading} />;
+}
+
+/**
+ * 詳細画面の「類似ノート」セクション(M1-4a §設計決定3・対象範囲4 参照)。関係(種類・
+ * 説明)は M1-4b で別枠として追加される予定のため、ここでは類似のみを扱う。取得失敗は
+ * セクション内で完結させ、ノート本体の閲覧を妨げない(§ テスト観点 参照)。
+ *
+ * レスポンスの `status`(generating/ready/failed。relatedNotesStatusSchema 参照。Fable 5 +
+ * Codex 独立議論 論点2 で確定)に応じて表示を出し分ける。`generating` は埋め込みが未生成
+ * (=ポーリング中)であり、「類似候補が無い」という確定結果とは区別して生成中表示に留め、
+ * 空状態メッセージは出さない。
+ */
+function RelatedNotesSection({ noteId }: Readonly<{ noteId: string }>) {
+  const relatedNotesQuery = useRelatedNotesQuery(noteId);
+  const status = relatedNotesQuery.data?.status;
+  const similar = relatedNotesQuery.data?.similar ?? [];
+
+  return (
+    <Card className="mt-8">
+      <CardHeader>
+        <CardTitle className="text-base">類似ノート</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {(relatedNotesQuery.isLoading || status === "generating") && (
+          <div className="flex flex-col gap-2" aria-busy="true">
+            <p className="sr-only">類似ノートを生成中…</p>
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        )}
+
+        {relatedNotesQuery.isError && (
+          <p className="text-sm text-ink-600">類似ノートの取得に失敗しました。</p>
+        )}
+
+        {/* 埋め込み生成の失敗(控えめな表示。専用リトライは設けない。ノート再編集や
+            回収バッチによる既存の再生成経路に委ねる)。 */}
+        {status === "failed" && (
+          <p className="text-sm text-ink-600">類似ノートを生成できませんでした。</p>
+        )}
+
+        {status === "ready" && similar.length === 0 && (
+          <p className="text-sm text-ink-600">類似するノートはまだありません。</p>
+        )}
+
+        {(status === "ready" || status === "failed") && similar.length > 0 && (
+          <ul className="flex flex-col gap-2">
+            {similar.map((item) => (
+              <li key={item.id}>
+                <Link
+                  to={`/notes/${item.id}`}
+                  className="block rounded-lg border border-border px-3 py-2 hover:bg-surface-muted"
+                >
+                  <p className="truncate text-sm font-medium text-ink-900">
+                    {getDisplayTitle({ title: item.title, body: item.excerpt })}
+                  </p>
+                  {/* item.title が無い場合は上記の仮タイトルが既に excerpt 由来のため、
+                      同じ文字列を二重表示しないよう title がある場合のみ抜粋行を出す。 */}
+                  {item.title && item.excerpt && (
+                    <p className="mt-0.5 truncate text-xs text-ink-600">{item.excerpt}</p>
+                  )}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function NoteDetailPage() {
@@ -209,6 +284,8 @@ export function NoteDetailPage() {
           {note.body}
         </p>
       )}
+
+      <RelatedNotesSection noteId={note.id} />
     </div>
   );
 }

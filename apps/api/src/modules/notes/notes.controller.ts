@@ -4,12 +4,14 @@ import { TsRestHandler, tsRestHandler } from "@ts-rest/nest";
 import type { Queue } from "bullmq";
 import {
   notesContract,
+  NOTE_ENRICHMENT_QUEUE_NAME,
   SCREENSHOT_ANALYSIS_QUEUE_NAME,
   toPublicNote,
   type AuthenticatedUser,
 } from "@secondbrain/shared";
 import { enqueueScreenshotAnalysis } from "../screenshots/screenshots.producer";
 import { UploadRateLimitGuard } from "../screenshots/upload-rate-limit.guard";
+import { enqueueNoteEnrichment } from "./note-enrichment.producer";
 import { NotesService } from "./notes.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { CurrentUser } from "../auth/current-user.decorator";
@@ -23,6 +25,7 @@ export class NotesController {
   constructor(
     private readonly notesService: NotesService,
     @InjectQueue(SCREENSHOT_ANALYSIS_QUEUE_NAME) private readonly screenshotAnalysisQueue: Queue,
+    @InjectQueue(NOTE_ENRICHMENT_QUEUE_NAME) private readonly noteEnrichmentQueue: Queue,
   ) {}
 
   @TsRestHandler(notesContract.list)
@@ -47,10 +50,28 @@ export class NotesController {
     });
   }
 
+  // 意味的に近い過去ノートの類似候補探索(M1-4a §設計決定3 参照)。404 方針は既存
+  // エンドポイントと同じく「対象が存在しない」「他ユーザー所有」を区別しない。
+  @TsRestHandler(notesContract.related)
+  related(@CurrentUser() user: AuthenticatedUser) {
+    return tsRestHandler(notesContract.related, async ({ params }) => {
+      const result = await this.notesService.findRelated(user.id, params.id);
+      if (result === null) {
+        return { status: 404 as const, body: NOT_FOUND_BODY };
+      }
+      return { status: 200 as const, body: result };
+    });
+  }
+
   @TsRestHandler(notesContract.create)
   create(@CurrentUser() user: AuthenticatedUser) {
     return tsRestHandler(notesContract.create, async ({ body }) => {
       const note = await this.notesService.create(user.id, body);
+      // DB へ enrichment_status='pending' を書き込んだ(NotesService.create の insert)後に
+      // enqueue する(fail-closed の投入順序。M1-4a 計画 §担当スコープ2 参照。enqueue 失敗は
+      // ログのみで、レスポンスは常に成功のまま返す)。screenshot ノートはこの経路を通らない
+      // (create() は memo 専用)ため、AI 解析完了後の worker 側投入(担当外)と競合しない。
+      await enqueueNoteEnrichment(this.noteEnrichmentQueue, note.id);
       return { status: 201 as const, body: note };
     });
   }
@@ -61,6 +82,12 @@ export class NotesController {
       const note = await this.notesService.update(user.id, params.id, body);
       if (!note) {
         return { status: 404 as const, body: NOT_FOUND_BODY };
+      }
+      // 更新対象フィールドが1つ以上ある場合のみ enqueue する(空の PATCH は
+      // NotesService.update が DB へ書き込まないため、enrichment_status='pending' が
+      // 書き込まれておらず fail-closed の前提を満たさない。M1-4a 計画 §担当スコープ2 参照)。
+      if (Object.keys(body).length > 0) {
+        await enqueueNoteEnrichment(this.noteEnrichmentQueue, note.id);
       }
       return { status: 200 as const, body: note };
     });

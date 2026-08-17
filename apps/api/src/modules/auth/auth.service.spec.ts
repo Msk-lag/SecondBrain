@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcryptjs";
 import type { Database } from "@secondbrain/db";
@@ -22,7 +23,8 @@ function createMockDb(user: MockUser | undefined): Database {
 }
 
 describe("AuthService", () => {
-  const jwtService = new JwtService({ secret: "test-secret" });
+  // 固定のテスト用シークレットはリポジトリに残さない(Codex HIGH 指摘対応)。
+  const jwtService = new JwtService({ secret: randomBytes(32).toString("hex") });
 
   it("正しい email と password でアクセストークンを返す", async () => {
     const passwordHash = await bcrypt.hash("correct-password", 10);

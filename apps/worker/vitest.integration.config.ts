@@ -18,6 +18,10 @@ export default defineConfig({
     environment: "node",
     include: ["test/**/*.integration.spec.ts"],
     setupFiles: ["./test/integration-setup.ts"],
+    // apps/api/vitest.integration.config.ts と同じ理由でファイル単位に直列化する
+    // (setupFiles の beforeAll/afterAll が共有のテスト DB・バケット・Redis DB index を
+    // 作り直すため、ファイル並行実行と両立しない)。
+    fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 120_000,
     env: {
