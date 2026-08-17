@@ -63,6 +63,16 @@ function createFakeDb(config: {
   } as unknown as Database;
 }
 
+/**
+ * `db.execute()` が永遠に解決しない DB(withDbTimeout のタイムアウト分岐 —
+ * NoteEnrichmentDbTimeoutError を実際に発生させるためのテスト専用)。
+ */
+function createNeverResolvingDb(): Database {
+  return {
+    execute: () => new Promise<never>(() => undefined),
+  } as unknown as Database;
+}
+
 function createFakeJob(overrides: {
   noteId?: string;
   attemptsMade?: number;
@@ -368,6 +378,31 @@ describe("NoteEnrichmentProcessor.process", () => {
       );
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  it("スナップショット取得(SELECT)が10秒応答しない場合、withDbTimeout が NoteEnrichmentDbTimeoutError で10秒タイムアウトさせ、BullMQ へ渡る例外は db_timeout のサニタイズ済みメッセージになる(withDbTimeout のタイムアウト分岐の回帰テスト)", async () => {
+    vi.useFakeTimers();
+    try {
+      const db = createNeverResolvingDb();
+      const { factory, factorySpy } = createFakeEmbeddingClientFactory();
+      const processor = new NoteEnrichmentProcessor(db, factory);
+
+      const resultPromise = processor.process(createFakeJob({ attemptsMade: 0, attempts: 3 }));
+      const assertion = resultPromise.then(
+        () => {
+          throw new Error("expected process() to reject");
+        },
+        (err: unknown) => err as Error,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      const thrown = await assertion;
+
+      expect(thrown.name).toBe("SanitizedNoteEnrichmentError");
+      expect(thrown.message).toBe("note enrichment db operation timed out");
+      expect(factorySpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
     }
   });
 

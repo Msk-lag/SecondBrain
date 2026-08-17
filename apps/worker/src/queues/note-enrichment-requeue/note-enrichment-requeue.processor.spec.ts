@@ -96,6 +96,29 @@ function fakeJobWithState(
 }
 
 describe("NoteEnrichmentRequeueProcessor.process", () => {
+  it("対象抽出 SELECT が10秒応答しない場合、withTimeout が MaintenanceTimeoutError で10秒タイムアウトさせ、サニタイズ済みエラーとして実行回全体を異常終了させる(withTimeout のタイムアウト分岐の回帰テスト)", async () => {
+    vi.useFakeTimers();
+    try {
+      // 意図的に永遠に解決しない promise(note-purge.processor.spec.ts の同種テストと同じパターン)。
+      // ネストしたクロージャを深くしないよう、チェーンの各段を外側で組み立てる。
+      const pending = new Promise<unknown[]>(() => undefined);
+      const limitStub = { limit: () => pending };
+      const whereStub = { orderBy: () => limitStub };
+      const db = {
+        select: () => ({ from: () => ({ where: () => whereStub }) }),
+      } as unknown as Database;
+      const { targetQueue } = createFakeTargetQueue({});
+      const processor = new NoteEnrichmentRequeueProcessor(db, targetQueue);
+
+      const resultPromise = processor.process();
+      const assertion = expect(resultPromise).rejects.toBeInstanceOf(SanitizedMaintenanceException);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("最初の対象抽出 SELECT が失敗した場合、サニタイズ済みエラーを re-throw して実行回全体を異常終了させる", async () => {
     const secret = "connection refused to db-host:3306 secret-detail";
     const db = createFakeDb([new Error(secret)]);
