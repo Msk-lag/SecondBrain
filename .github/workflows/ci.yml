@@ -1,5 +1,10 @@
 name: CI
 
+# 全ジョブは checkout とテスト実行のみを行い、リポジトリへの書き込み・PR コメント・
+# パッケージ公開等は行わないため、既定権限(書き込みを含みうる)ではなく読み取り専用に限定する。
+permissions:
+  contents: read
+
 on:
   push:
     # feature ブランチは pull_request run のみで検査する(DOD-1 により最初の push 直後に
@@ -63,7 +68,9 @@ jobs:
             -v "${{ github.workspace }}:/repo" \
             -w /repo \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
-            detect --source . -v --config .gitleaks.toml
+            detect --source . -v --redact --config .gitleaks.toml
+          # --redact: 検出値そのものをログへ出力しない(公開リポジトリの Actions ログは
+          # 誰でも閲覧できるため、検出値をそのまま出すと「検出=即座に漏洩」になってしまう)。
 
   diff-coverage:
     runs-on: ubuntu-latest

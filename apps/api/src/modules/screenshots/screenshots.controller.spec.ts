@@ -1,4 +1,7 @@
-process.env.JWT_SECRET ??= "test-secret";
+// 固定のテスト用シークレットはリポジトリに残さない(Codex HIGH 指摘対応)。実行時に
+// ランダム生成する — 公開されたコミット履歴からの推測・本番環境への混入を構造的に防ぐ。
+import { randomBytes } from "node:crypto";
+process.env.JWT_SECRET ??= randomBytes(32).toString("hex");
 
 vi.mock("./detect-image-type", () => ({
   detectImageType: vi.fn(),
@@ -41,6 +44,12 @@ function makeScreenshotNote(overrides: Partial<Note> = {}): Note {
     deletedAt: null,
     processingGeneration: 0,
     processingAttemptToken: null,
+    // 埋め込み関連列(M1-4a §設計決定1 参照)。この spec は enrichment 経路を対象としないため
+    // 常に未生成(null)固定。
+    embedding: null,
+    embeddingModel: null,
+    embeddingFingerprint: null,
+    enrichmentStatus: null,
     createdAt: new Date("2026-07-11T00:00:00.000Z"),
     updatedAt: new Date("2026-07-11T00:00:00.000Z"),
     ...overrides,

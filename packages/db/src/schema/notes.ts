@@ -16,6 +16,10 @@ export type NoteType = (typeof noteTypeValues)[number];
 export const noteStatusValues = ["pending", "processing", "completed", "failed"] as const;
 export type NoteStatus = (typeof noteStatusValues)[number];
 
+// 埋め込み生成(enrichment)ジョブの状態。NULL = 対象外/旧データ(M1-4a §設計決定4 参照)。
+export const noteEnrichmentStatusValues = ["pending", "completed", "failed"] as const;
+export type NoteEnrichmentStatus = (typeof noteEnrichmentStatusValues)[number];
+
 /**
  * MariaDB の JSON 型は LONGTEXT + CHECK 制約のエイリアスで、MySQL のような
  * プロトコルレベルの JSON 型フラグを持たない。そのため mysql2 ドライバは
@@ -31,6 +35,21 @@ const jsonTextArray = customType<{ data: string[]; driverData: string }>({
   },
   fromDriver(value) {
     return typeof value === "string" ? (JSON.parse(value) as string[]) : value;
+  },
+});
+
+/**
+ * MariaDB の VECTOR(1536) 型(M1-4a §設計決定1 参照)。drizzle-orm には対応する組み込み型が
+ * 無いため customType で `dataType()` が `vector(1536)` を返す形で定義する。書き込み
+ * (`VEC_FromText`)・距離計算(`VEC_DISTANCE_COSINE`)は raw SQL(`sql` テンプレート)経由で
+ * 行う運用のため、`toDriver`/`fromDriver` は実装しない。`data`/`driverData` を意図的に
+ * `never` にすることで、Drizzle のクエリビルダ経由(`select()`/`.values()`)でこの列を
+ * 誤って読み書きしようとした場合に型エラーとなるようにしている(埋め込みバイナリの
+ * 意図しない SELECT 混入を防ぐ。D0 指摘[4]の回帰観点にも寄与)。
+ */
+const embeddingVector = customType<{ data: never; driverData: never }>({
+  dataType() {
+    return "vector(1536)";
   },
 });
 
@@ -70,6 +89,16 @@ export const notes = mysqlTable(
     // 試行単位の fencing token(UUID)。claimForProcessing が呼ばれるたびに新しい値へ更新する
     // (§ 試行単位のfencing token(attempt token) 参照)
     processingAttemptToken: varchar("processing_attempt_token", { length: 36 }),
+    // 埋め込みベクトル(M1-4a §設計決定1 参照)。NULL = 未生成。読み出しは行わず、
+    // 距離計算は raw SQL(VEC_DISTANCE_COSINE)経由で行う。
+    embedding: embeddingVector("embedding"),
+    // 埋め込み生成に使ったモデル名(例: text-embedding-3-small)。NULL = 未生成。
+    embeddingModel: varchar("embedding_model", { length: 64 }),
+    // 埋め込み入力(title/summary/body 等の正規化連結)の SHA-256 hex。
+    // 再実行時にこの値が一致すれば OpenAI API を呼ばずスキップする(冪等性の担保)。
+    embeddingFingerprint: varchar("embedding_fingerprint", { length: 64 }),
+    // enrichment(埋め込み生成)ジョブの状態。NULL = 対象外/旧データ。
+    enrichmentStatus: mysqlEnum("enrichment_status", noteEnrichmentStatusValues),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
   },
@@ -80,6 +109,9 @@ export const notes = mysqlTable(
     index("notes_deleted_at_idx").on(table.deletedAt),
     // stuck ノート再投入バッチのスキャン用
     index("notes_status_idx").on(table.status),
+    // enrichment 回収バッチ(note-enrichment-requeue)のスキャン用
+    // (enrichment_status='pending' AND updated_at < now()-10分 の走査)
+    index("notes_enrichment_status_idx").on(table.enrichmentStatus),
   ],
 );
 

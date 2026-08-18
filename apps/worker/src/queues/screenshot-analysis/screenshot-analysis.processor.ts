@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { Inject, Logger } from "@nestjs/common";
-import { Processor, WorkerHost } from "@nestjs/bullmq";
-import type { Job } from "bullmq";
+import { InjectQueue, Processor, WorkerHost } from "@nestjs/bullmq";
+import type { Job, Queue } from "bullmq";
 import { and, eq, isNull, notes, or, type Database } from "@secondbrain/db";
 import {
+  NOTE_ENRICHMENT_QUEUE_NAME,
   SCREENSHOT_ANALYSIS_QUEUE_NAME,
   type ScreenshotAnalysisJobPayload,
   type ScreenshotAnalysisResult,
@@ -12,6 +13,7 @@ import {
 import { MinioClient } from "@secondbrain/storage";
 import { DRIZZLE } from "../../db/db.module";
 import { MINIO_CLIENT } from "../../storage/storage.module";
+import { enqueueNoteEnrichment } from "../note-enrichment/note-enrichment.producer";
 import { CLAUDE_VISION_CLIENT, ClaudeVisionClient } from "./claude-vision.client";
 import { resizeForClaude } from "./resize-for-claude";
 import { ImageFetchFailedError, SanitizedException, sanitizeError } from "./sanitize-error";
@@ -113,6 +115,7 @@ export class ScreenshotAnalysisProcessor extends WorkerHost {
     @Inject(DRIZZLE) private readonly db: Database,
     @Inject(MINIO_CLIENT) private readonly storage: MinioClient,
     @Inject(CLAUDE_VISION_CLIENT) private readonly claudeClient: ClaudeVisionClient,
+    @InjectQueue(NOTE_ENRICHMENT_QUEUE_NAME) private readonly enrichmentQueue: Queue,
   ) {
     super();
   }
@@ -171,7 +174,24 @@ export class ScreenshotAnalysisProcessor extends WorkerHost {
       const result = await this.claudeClient.analyze(resized, noteId);
 
       // 手順7: 成功時 completeAnalysis(processing+世代+token 条件付き。10秒タイムアウト)。
-      await withDbTimeout(() => this.completeAnalysis(noteId, generation, token, result));
+      // completeAnalysis の SET 句で enrichment_status='pending' も同時に書き込む
+      // (fail-closed の投入順序。M1-4a 計画 §設計決定4 参照)。affected rows に基づく成否
+      // (boolean)を受け取る(Codex D0 レビュー HIGH 指摘への対応: 以前は affected rows を
+      // 確認せず、CAS 不成立〔Claude 呼び出し中の論理削除や別試行による claim 更新〕で0件
+      // 更新の場合にも無条件で enqueue しており、保存されていないノートの埋め込み処理が
+      // 始まってしまっていた)。
+      const completed = await withDbTimeout(() =>
+        this.completeAnalysis(noteId, generation, token, result),
+      );
+
+      // note-enrichment(埋め込み生成)ジョブの投入契機(b): completeAnalysis の DB 書き込みが
+      // 実際に成立した(affected rows === 1)場合にのみ enqueue する(fail-closed。DB 側の
+      // enrichment_status='pending' が既に確定した後でなければ enqueue しない)。enqueue
+      // 自体の失敗はログのみで握りつぶす(enqueueNoteEnrichment 内部で保護済み。取りこぼしは
+      // note-enrichment-requeue が回収する)。
+      if (completed) {
+        await enqueueNoteEnrichment(this.enrichmentQueue, noteId);
+      }
     } catch (err) {
       // 手順8: 失敗時は最終試行判定で re-throw か failAnalysis かを分岐する。
       const sanitized = toSanitizedException(err, noteId);
@@ -284,13 +304,18 @@ export class ScreenshotAnalysisProcessor extends WorkerHost {
     return rows.length === 1;
   }
 
+  /**
+   * affected rows が1件(CAS 成立)の場合にのみ `true` を返す(Codex D0 レビュー HIGH 指摘への
+   * 対応)。呼び出し元はこの戻り値が `true` の場合にのみ note-enrichment を enqueue する。
+   * CAS ロジック・世代/トークンによるフェンシングの意味は変更しない。
+   */
   private async completeAnalysis(
     noteId: string,
     generation: number,
     token: string,
     result: ScreenshotAnalysisResult,
-  ): Promise<void> {
-    await this.db
+  ): Promise<boolean> {
+    const [updateResult] = await this.db
       .update(notes)
       .set({
         status: "completed",
@@ -299,6 +324,10 @@ export class ScreenshotAnalysisProcessor extends WorkerHost {
         tags: result.tags,
         concepts: result.concepts,
         extractedText: result.extractedText,
+        // note-enrichment(埋め込み生成)ジョブの投入契機(b)。M1-4a 計画 §設計決定4 の
+        // fail-closed の投入順序(DB へ pending を書き込んでから enqueue する)を満たすため、
+        // このステータス確定と同じ UPDATE 文で書き込む。
+        enrichmentStatus: "pending",
       })
       .where(
         and(
@@ -309,6 +338,7 @@ export class ScreenshotAnalysisProcessor extends WorkerHost {
           isNull(notes.deletedAt),
         ),
       );
+    return updateResult.affectedRows === 1;
   }
 
   private async failAnalysis(

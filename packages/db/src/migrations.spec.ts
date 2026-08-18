@@ -171,6 +171,93 @@ describe("notes テーブル拡張(M1-3 スクショ AI 解析)のマイグレ�
   });
 });
 
+describe("notes テーブル拡張(M1-4a 埋め込み生成)のマイグレーション SQL", () => {
+  const sql = readAllMigrationSql();
+
+  it("embedding が nullable な vector(1536) である", () => {
+    expect(sql).toMatch(/ADD `embedding` vector\(1536\);/i);
+  });
+
+  it("embedding_model が nullable な varchar(64) である", () => {
+    expect(sql).toMatch(/ADD `embedding_model` varchar\(64\);/i);
+  });
+
+  it("embedding_fingerprint が nullable な varchar(64) である", () => {
+    expect(sql).toMatch(/ADD `embedding_fingerprint` varchar\(64\);/i);
+  });
+
+  it("enrichment_status が pending/completed/failed の nullable な enum である", () => {
+    expect(sql).toMatch(/ADD `enrichment_status` enum\('pending','completed','failed'\);/i);
+  });
+
+  it("enrichment_status の単独インデックスを持つ(回収バッチのスキャン用)", () => {
+    expect(sql).toMatch(
+      /CREATE INDEX `notes_enrichment_status_idx` ON `notes` \(`enrichment_status`\)/i,
+    );
+  });
+});
+
+/**
+ * enrichment_status 列の追加(0004)を含むマイグレーションファイル名を探す
+ * (§ enrichment_status 列の既存行バックフィル(0005) の前提となる列追加)。
+ */
+function findEnrichmentStatusAddMigrationFile(): string {
+  const files = listMigrationFiles();
+  const found = files.find((file) => /ADD `enrichment_status`/i.test(readMigrationFile(file)));
+  expect(found).toBeDefined();
+  return found as string;
+}
+
+/**
+ * enrichment_status が NULL のまま取り残された既存行を pending にバックフィルする
+ * マイグレーションファイル名を探す(0005。§ enrichment_status 列の既存行バックフィル 参照)。
+ */
+function findEnrichmentStatusBackfillMigrationFile(): string {
+  const files = listMigrationFiles();
+  const found = files.find((file) =>
+    /SET `enrichment_status` = 'pending'/i.test(readMigrationFile(file)),
+  );
+  expect(found).toBeDefined();
+  return found as string;
+}
+
+describe("enrichment_status 列の既存行バックフィル(0005。0004 の列追加で NULL のまま取り残された行の是正)", () => {
+  const backfillFile = findEnrichmentStatusBackfillMigrationFile();
+  const backfillSql = readMigrationFile(backfillFile);
+
+  it("enrichment_status を追加したマイグレーション(0004)より後に存在する", () => {
+    const addFile = findEnrichmentStatusAddMigrationFile();
+    expect(backfillFile.localeCompare(addFile)).toBeGreaterThan(0);
+  });
+
+  it("enrichment_status IS NULL の行のみを対象とする(冪等性の担保)", () => {
+    expect(backfillSql).toMatch(/WHERE `enrichment_status` IS NULL/i);
+  });
+
+  it("論理削除済み(deleted_at IS NOT NULL)の行を除外する", () => {
+    expect(backfillSql).toMatch(/AND `deleted_at` IS NULL/i);
+  });
+
+  it("解析が成功した行(status = 'completed')のみを対象とする(解析失敗行は埋め込み入力が空のため除外)", () => {
+    expect(backfillSql).toMatch(/AND `status` = 'completed'/i);
+  });
+
+  it("title/summary/body/extracted_text のいずれかが非空の行のみを対象とする(埋め込み入力を持たない行を除外。埋め込み入力の実体である note-enrichment-fingerprint の4セグメントのうち summary が条件から漏れていた不具合の回帰テスト)", () => {
+    expect(backfillSql).toMatch(/`title` IS NOT NULL AND `title` != ''/i);
+    expect(backfillSql).toMatch(/`summary` IS NOT NULL AND `summary` != ''/i);
+    expect(backfillSql).toMatch(/`body` IS NOT NULL AND `body` != ''/i);
+    expect(backfillSql).toMatch(/`extracted_text` IS NOT NULL AND `extracted_text` != ''/i);
+  });
+
+  it("tags のみを持つ行は対象外とする(tags は埋め込み入力として弱いため、意図的に条件へ含めない)", () => {
+    expect(backfillSql).not.toMatch(/`tags`/i);
+  });
+
+  it("対象行の enrichment_status を pending に更新する", () => {
+    expect(backfillSql).toMatch(/SET `enrichment_status` = 'pending'/i);
+  });
+});
+
 describe("concepts 列の2段階 NOT NULL 化(既存行の移行手順。§ concepts 列の NOT NULL 化 参照)", () => {
   it("1段階目: concepts を nullable な json 列として追加し、既存行を '[]' で backfill する", () => {
     const addFile = findConceptsAddMigrationFile();

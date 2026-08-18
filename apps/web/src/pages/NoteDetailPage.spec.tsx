@@ -12,6 +12,7 @@ vi.mock("@/lib/api-client", () => ({
       get: vi.fn(),
       delete: vi.fn(),
       retry: vi.fn(),
+      related: vi.fn(),
     },
   },
 }));
@@ -54,6 +55,14 @@ describe("NoteDetailPage", () => {
     vi.mocked(apiClient.notes.get).mockReset();
     vi.mocked(apiClient.notes.retry).mockReset();
     vi.mocked(toast.error).mockReset();
+    vi.mocked(apiClient.notes.related).mockReset();
+    // 個々のテストの主眼は類似ノート以外のため、既定では ready + 空配列を返しておく
+    // (類似ノート自体の表示・状態は専用の describe ブロックで検証する)。
+    vi.mocked(apiClient.notes.related).mockResolvedValue({
+      status: 200,
+      body: { status: "ready", similar: [] },
+      headers: new Headers(),
+    });
   });
 
   it("通常時はタイトル・本文・要約・タグを表示する", async () => {
@@ -232,6 +241,145 @@ describe("NoteDetailPage", () => {
       await user.click(screen.getByRole("button", { name: "抽出したテキストを表示" }));
 
       expect(screen.getByText("抽出された原文テキスト")).toBeInTheDocument();
+    });
+  });
+
+  describe("類似ノートセクション", () => {
+    beforeEach(() => {
+      vi.mocked(apiClient.notes.get).mockResolvedValue({
+        status: 200,
+        body: note,
+        headers: new Headers(),
+      });
+    });
+
+    it("類似ノートを表示し、項目が該当ノート詳細へのリンクになる", async () => {
+      vi.mocked(apiClient.notes.related).mockResolvedValue({
+        status: 200,
+        body: {
+          status: "ready",
+          similar: [
+            {
+              id: "note-2",
+              title: "関連メモ",
+              type: "memo" as const,
+              excerpt: "関連する抜粋テキスト",
+              distance: 0.12,
+            },
+          ],
+        },
+        headers: new Headers(),
+      });
+
+      renderPage("note-1");
+
+      expect(await screen.findByText("関連メモ")).toBeInTheDocument();
+      expect(screen.getByText("関連する抜粋テキスト")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /関連メモ/ })).toHaveAttribute(
+        "href",
+        "/notes/note-2",
+      );
+    });
+
+    it("タイトル未入力の類似ノートは仮タイトル表示ロジックを再利用する", async () => {
+      vi.mocked(apiClient.notes.related).mockResolvedValue({
+        status: 200,
+        body: {
+          status: "ready",
+          similar: [
+            {
+              id: "note-3",
+              title: null,
+              type: "memo" as const,
+              excerpt: "タイトル未入力ノートの抜粋",
+              distance: 0.2,
+            },
+          ],
+        },
+        headers: new Headers(),
+      });
+
+      renderPage("note-1");
+
+      // title が無い場合は excerpt から仮タイトルを補い、抜粋行は二重表示しない
+      // (§ apps/web/src/features/notes/utils.ts の getDisplayTitle 参照)。
+      expect(await screen.findByText("タイトル未入力ノートの抜粋")).toBeInTheDocument();
+      expect(screen.getAllByText("タイトル未入力ノートの抜粋")).toHaveLength(1);
+    });
+
+    it("ready かつ類似ノートが無い場合は空状態メッセージを表示する", async () => {
+      vi.mocked(apiClient.notes.related).mockResolvedValue({
+        status: 200,
+        body: { status: "ready", similar: [] },
+        headers: new Headers(),
+      });
+
+      renderPage("note-1");
+
+      expect(await screen.findByText("類似するノートはまだありません。")).toBeInTheDocument();
+    });
+
+    // 生成中(generating)は「類似候補が無い」という確定結果とは区別し、生成中表示に留めて
+    // 空状態メッセージは出さない(Fable 5 + Codex 独立議論 論点2 で確定)。
+    it("generating の場合は生成中表示を出し、空状態メッセージは表示しない", async () => {
+      vi.mocked(apiClient.notes.related).mockResolvedValue({
+        status: 200,
+        body: { status: "generating", similar: [] },
+        headers: new Headers(),
+      });
+
+      renderPage("note-1");
+
+      expect(await screen.findByText("類似ノートを生成中…")).toBeInTheDocument();
+      expect(screen.queryByText("類似するノートはまだありません。")).not.toBeInTheDocument();
+    });
+
+    it("failed の場合は控えめな失敗表示を出し、専用のリトライボタンは設けない", async () => {
+      vi.mocked(apiClient.notes.related).mockResolvedValue({
+        status: 200,
+        body: { status: "failed", similar: [] },
+        headers: new Headers(),
+      });
+
+      renderPage("note-1");
+
+      expect(await screen.findByText("類似ノートを生成できませんでした。")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /再試行|リトライ/ })).not.toBeInTheDocument();
+      // ノート本体の表示が壊れていないこと。
+      expect(screen.getByRole("heading", { name: "一言メモ" })).toBeInTheDocument();
+    });
+
+    it("failed でも既存の候補があれば一覧を併せて表示する", async () => {
+      vi.mocked(apiClient.notes.related).mockResolvedValue({
+        status: 200,
+        body: {
+          status: "failed",
+          similar: [
+            {
+              id: "note-4",
+              title: "古い候補",
+              type: "memo" as const,
+              excerpt: "生成成功時点の候補",
+              distance: 0.3,
+            },
+          ],
+        },
+        headers: new Headers(),
+      });
+
+      renderPage("note-1");
+
+      expect(await screen.findByText("類似ノートを生成できませんでした。")).toBeInTheDocument();
+      expect(screen.getByText("古い候補")).toBeInTheDocument();
+    });
+
+    it("取得に失敗してもノート本体の表示は壊れず、セクション内にエラーを表示する", async () => {
+      vi.mocked(apiClient.notes.related).mockRejectedValue(new Error("network error"));
+
+      renderPage("note-1");
+
+      expect(await screen.findByRole("heading", { name: "一言メモ" })).toBeInTheDocument();
+      expect(await screen.findByText("類似ノートの取得に失敗しました。")).toBeInTheDocument();
     });
   });
 });

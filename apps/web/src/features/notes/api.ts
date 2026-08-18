@@ -15,6 +15,7 @@ export const notesKeys = {
   all: ["notes"] as const,
   list: () => [...notesKeys.all, "list"] as const,
   detail: (id: string) => [...notesKeys.all, "detail", id] as const,
+  related: (id: string) => [...notesKeys.all, "related", id] as const,
 };
 
 const NOTES_PAGE_SIZE = 20;
@@ -78,6 +79,35 @@ export function useNoteQuery(id: string) {
     refetchInterval: (query) => {
       const data = query.state.data;
       return data && isProcessingStatus(data.status) ? PROCESSING_POLL_INTERVAL_MS : false;
+    },
+  });
+}
+
+/**
+ * 詳細画面の「類似ノート」セクション用(M1-4a §設計決定3 参照)。対象ノートが未取得
+ * (noteId 未確定)の間は無効化する。ノート本体の取得(useNoteQuery)とは独立したクエリの
+ * ため、失敗してもノート本体の表示には影響しない(呼び出し側でセクション内に留める)。
+ *
+ * ポーリングはレスポンス自身の `status` を停止条件にする(Fable 5 + Codex 独立議論 論点2 で
+ * 確定。relatedNotesStatusSchema 参照)。埋め込みが未生成の間(`generating`)だけポーリングを
+ * 続け、`ready`/`failed` という確定した結果に遷移した時点で必ず停止する。この設計により
+ * ポーリング対象は本クエリ1本で完結し、ノート本体クエリ(useNoteQuery)側の refetchInterval
+ * 条件やクエリ間の協調(状態遷移を検知した invalidate 等)は不要になる。
+ */
+export function useRelatedNotesQuery(noteId: string) {
+  return useQuery({
+    queryKey: notesKeys.related(noteId),
+    queryFn: async () => {
+      const response = await apiClient.notes.related({ params: { id: noteId } });
+      if (response.status !== 200) {
+        throw new Error(`類似ノートの取得に失敗しました(status: ${response.status})`);
+      }
+      return response.body;
+    },
+    enabled: noteId.length > 0,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data?.status === "generating" ? PROCESSING_POLL_INTERVAL_MS : false;
     },
   });
 }

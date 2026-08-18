@@ -3,6 +3,9 @@ import {
   listNotesQuerySchema,
   noteSchema,
   noteStatusSchema,
+  relatedNoteItemSchema,
+  relatedNotesResponseSchema,
+  relatedNotesStatusSchema,
   screenshotAnalysisResultSchema,
   updateNoteRequestSchema,
 } from "./notes.js";
@@ -172,6 +175,94 @@ describe("noteStatusSchema", () => {
 
   it("未知の値を拒否する", () => {
     expect(noteStatusSchema.safeParse("unknown").success).toBe(false);
+  });
+});
+
+describe("relatedNoteItemSchema", () => {
+  const valid = {
+    id: "note-1",
+    title: "類似ノート",
+    type: "memo",
+    excerpt: "抜粋テキスト",
+    distance: 0.12,
+  };
+
+  it("正常な項目を受理する", () => {
+    expect(relatedNoteItemSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("title/excerpt に null を受理する(未入力のノート)", () => {
+    const result = relatedNoteItemSchema.safeParse({ ...valid, title: null, excerpt: null });
+    expect(result.success).toBe(true);
+  });
+
+  it("不正な type を拒否する", () => {
+    const result = relatedNoteItemSchema.safeParse({ ...valid, type: "invalid" });
+    expect(result.success).toBe(false);
+  });
+
+  it("distance が数値以外の場合を拒否する", () => {
+    const result = relatedNoteItemSchema.safeParse({ ...valid, distance: "0.12" });
+    expect(result.success).toBe(false);
+  });
+
+  it("embedding フィールドを含んでいても公開スキーマには現れない(未知キーは strip される)", () => {
+    const result = relatedNoteItemSchema.safeParse({ ...valid, embedding: [1, 2, 3] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("embedding");
+    }
+  });
+});
+
+describe("relatedNotesStatusSchema", () => {
+  it("generating/ready/failed を受理する", () => {
+    for (const status of ["generating", "ready", "failed"]) {
+      expect(relatedNotesStatusSchema.safeParse(status).success).toBe(true);
+    }
+  });
+
+  it("DB の enrichment_status 生値(pending/completed 等)をそのまま受理しない(アプリ概念への変換が必須)", () => {
+    for (const status of ["pending", "completed"]) {
+      expect(relatedNotesStatusSchema.safeParse(status).success).toBe(false);
+    }
+  });
+
+  it("未知の値を拒否する", () => {
+    expect(relatedNotesStatusSchema.safeParse("unknown").success).toBe(false);
+  });
+});
+
+describe("relatedNotesResponseSchema", () => {
+  it("status: ready + 空配列を受理する(生成済みだが類似候補が無い場合)", () => {
+    const result = relatedNotesResponseSchema.safeParse({ status: "ready", similar: [] });
+    expect(result.success).toBe(true);
+  });
+
+  it("status: generating + 空配列を受理する(未生成・生成中の場合)", () => {
+    const result = relatedNotesResponseSchema.safeParse({ status: "generating", similar: [] });
+    expect(result.success).toBe(true);
+  });
+
+  it("status: failed + 非空配列を受理する(生成失敗時も既存 embedding 由来の候補を返してよい)", () => {
+    const result = relatedNotesResponseSchema.safeParse({
+      status: "failed",
+      similar: [{ id: "note-1", title: "旧候補", type: "memo", excerpt: "抜粋", distance: 0.2 }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("status が欠けている場合を拒否する", () => {
+    const result = relatedNotesResponseSchema.safeParse({ similar: [] });
+    expect(result.success).toBe(false);
+  });
+
+  it("similar が配列以外の場合を拒否する", () => {
+    const result = relatedNotesResponseSchema.safeParse({
+      status: "ready",
+      similar: "not-an-array",
+    });
+    expect(result.success).toBe(false);
   });
 });
 

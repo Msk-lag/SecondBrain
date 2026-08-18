@@ -29,6 +29,20 @@
       "when": 1783737637030,
       "tag": "0003_shiny_blob",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1786867200000,
+      "tag": "0004_add_note_enrichment_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1786870800000,
+      "tag": "0005_backfill_note_enrichment_status",
+      "breakpoints": true
     }
   ]
 }

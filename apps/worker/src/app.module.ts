@@ -8,6 +8,8 @@ import { ScreenshotAnalysisQueueModule } from "./queues/screenshot-analysis-queu
 import { ScreenshotAnalysisModule } from "./queues/screenshot-analysis/screenshot-analysis.module";
 import { NoteStuckRequeueModule } from "./queues/note-stuck-requeue/note-stuck-requeue.module";
 import { NotePurgeModule } from "./queues/note-purge/note-purge.module";
+import { NoteEnrichmentModule } from "./queues/note-enrichment/note-enrichment.module";
+import { NoteEnrichmentRequeueModule } from "./queues/note-enrichment-requeue/note-enrichment-requeue.module";
 
 @Module({
   imports: [
@@ -19,6 +21,8 @@ import { NotePurgeModule } from "./queues/note-purge/note-purge.module";
     ScreenshotAnalysisModule,
     NoteStuckRequeueModule,
     NotePurgeModule,
+    NoteEnrichmentModule,
+    NoteEnrichmentRequeueModule,
   ],
 })
 export class AppModule {}

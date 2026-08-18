@@ -13,7 +13,19 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "html", "lcov", "json"],
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.spec.ts", "src/**/*.test.ts", "src/**/*.d.ts", "src/main.ts"],
+      exclude: [
+        "src/**/*.spec.ts",
+        "src/**/*.test.ts",
+        "src/**/*.d.ts",
+        "src/main.ts",
+        // apps/worker/vitest.config.ts と同じ理由。`src/queues/**/*.module.ts`(`@Module({...})`
+        // デコレータ + 空のクラス定義のみで構成される、宣言的な DI 設定)は単体テストでは
+        // 到達しようがない。既存の screenshot-analysis-queue.module.ts も module 専用の spec を
+        // 持たずカバレッジ 0% のままであり、プロジェクトとして「モジュール定義はテストしない」
+        // 実態になっている。`src/db/db.module.ts`(接続プール生成等の実ロジックを持ち、実際に
+        // spec でテストされている)は `src/queues/` 配下ではないためこの除外の対象外(意図的)。
+        "src/queues/**/*.module.ts",
+      ],
       // 後退禁止 floor(ADR-0003)。実測値を下回らない範囲でのみ更新可(引き上げは歓迎)。
       thresholds: {
         statements: 87,

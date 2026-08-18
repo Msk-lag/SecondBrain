@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { defineConfig } from "vitest/config";
 import {
   API_TEST_APP_ACCESS_KEY,
@@ -22,6 +23,11 @@ export default defineConfig({
     environment: "node",
     include: ["test/**/*.e2e-spec.ts"],
     setupFiles: ["./test/integration-setup.ts"],
+    // setupFiles の beforeAll/afterAll は「テストファイルごと」に走り、共有のテスト DB
+    // (DROP DATABASE → CREATE → migrate → 最後に DROP)・MinIO バケット・Redis DB index を
+    // 作り直す。ファイルを並行実行すると互いの DB・バケットを消し合うため(実際に
+    // 「Unknown database」「Table doesn't exist」で失敗した)、ファイル単位で直列化する。
+    fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 120_000,
     env: {
@@ -30,6 +36,13 @@ export default defineConfig({
       MINIO_APP_ACCESS_KEY: API_TEST_APP_ACCESS_KEY,
       MINIO_APP_SECRET_KEY: API_TEST_APP_SECRET_KEY,
       REDIS_DB: String(API_TEST_REDIS_DB),
+      // 開発者のローカル .env の JWT_SECRET(プレースホルダのままの場合もある)に依存しない
+      // よう、統合テスト専用の値を明示する。固定文字列はリポジトリに残さない(Codex HIGH
+      // 指摘対応 — Git 管理された固定値は公開情報になり、設定ミスで本番に混入すると署名鍵が
+      // 既知の値になってしまう)。Vitest の設定モジュール評価時(プロセス起動ごと)に一度だけ
+      // ランダム生成する。getRequiredJwtSecret のプレースホルダ/既知テスト鍵 denylist とは
+      // 無関係な、実行のたびに変わる値。
+      JWT_SECRET: randomBytes(32).toString("hex"),
     },
   },
 });
