@@ -45,6 +45,18 @@ function textResponse(payload: unknown, stopReason = "end_turn"): unknown {
   };
 }
 
+/**
+ * content に "text" ブロックが含まれない応答(例: tool_use のみ、または空配列)。
+ * `isTextContentBlock` による find が undefined を返す分岐(relation-judge.client.ts の
+ * `if (!textBlock)` 節)を検証するためのヘルパー。textResponse の隣に置く。
+ */
+function noTextBlockResponse(content: unknown[], stopReason = "end_turn"): unknown {
+  return {
+    stop_reason: stopReason,
+    content,
+  };
+}
+
 const SOURCE: RelationJudgeNoteInput = {
   title: "source title",
   summary: "source summary",
@@ -167,6 +179,34 @@ describe("AnthropicRelationJudgeClient", () => {
       stop_reason: "end_turn",
       content: [{ type: "text", text: "not json at all" }],
     });
+    const client = new AnthropicRelationJudgeClient("api-key");
+
+    const error: unknown = await client
+      .judge(SOURCE, CANDIDATES, "note-1")
+      .catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(RelationJudgeError);
+    expect((error as RelationJudgeError).category).toBe("structural_invalid");
+    expect(isRelationJudgeErrorRetryable(error)).toBe(false);
+  });
+
+  it("rejects with a structural_invalid RelationJudgeError (non-retryable) when the response content has no text block (e.g. tool_use only)", async () => {
+    createMock.mockResolvedValue(
+      noTextBlockResponse([{ type: "tool_use", id: "tool-1", name: "x", input: {} }]),
+    );
+    const client = new AnthropicRelationJudgeClient("api-key");
+
+    const error: unknown = await client
+      .judge(SOURCE, CANDIDATES, "note-1")
+      .catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(RelationJudgeError);
+    expect((error as RelationJudgeError).category).toBe("structural_invalid");
+    expect(isRelationJudgeErrorRetryable(error)).toBe(false);
+  });
+
+  it("rejects with a structural_invalid RelationJudgeError (non-retryable) when the response content is an empty array", async () => {
+    createMock.mockResolvedValue(noTextBlockResponse([]));
     const client = new AnthropicRelationJudgeClient("api-key");
 
     const error: unknown = await client

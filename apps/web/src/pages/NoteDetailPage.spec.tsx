@@ -576,6 +576,36 @@ describe("NoteDetailPage", () => {
         expect(screen.queryByText("(解決策)")).not.toBeInTheDocument();
       });
 
+      // 契約上 same-theme/other の typeDirection は常に "none" になるため通常は起きないが、
+      // RelationDirectionLabel には防御的な分岐(RELATION_DIRECTION_ROLE_LABELS に該当
+      // エントリが無い場合は null を返す)がある。万一 API が不整合な組み合わせ
+      // (same-theme なのに typeDirection が outgoing 等)を返しても、役割ラベルの
+      // 括弧書きを出さずに表示が壊れないことを確認する。
+      it("relationType が same-theme(役割ラベル定義なし)で typeDirection が none 以外の場合でも、役割ラベルの括弧書きは表示されない(防御的分岐。契約上は起きない組み合わせ)", async () => {
+        vi.mocked(apiClient.notes.related).mockResolvedValue({
+          status: 200,
+          body: {
+            status: "ready",
+            relationStatus: "ready",
+            relations: [
+              {
+                ...outgoingRelation,
+                relationType: "same-theme" as const,
+                typeDirection: "outgoing" as const,
+              },
+            ],
+            similar: [],
+          },
+          headers: new Headers(),
+        });
+
+        renderPage("note-1");
+
+        expect(await screen.findByText("同じテーマ")).toBeInTheDocument();
+        // 役割ラベルはどの語彙にも定義が無いため、括弧書きのテキストが一切出ないこと。
+        expect(screen.queryByText(/^\(.+\)$/)).not.toBeInTheDocument();
+      });
+
       it("not_started かつ関係が無い場合は関係あり群自体を表示しない", async () => {
         vi.mocked(apiClient.notes.related).mockResolvedValue({
           status: 200,

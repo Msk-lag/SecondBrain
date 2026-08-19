@@ -3,7 +3,16 @@ import { Test, type TestingModule } from "@nestjs/testing";
 import type { INestApplication } from "@nestjs/common";
 import { getQueueToken } from "@nestjs/bullmq";
 import type { Job, Queue } from "bullmq";
-import { and, eq, notes, noteRelations, sql, users, type Database, type NoteRelation } from "@secondbrain/db";
+import {
+  and,
+  eq,
+  notes,
+  noteRelations,
+  sql,
+  users,
+  type Database,
+  type NoteRelation,
+} from "@secondbrain/db";
 import {
   noteEnrichmentJobId,
   NOTE_ENRICHMENT_QUEUE_NAME,
@@ -765,7 +774,9 @@ describe("note-enrichment 統合テスト(ジョブ処理ロジック)", () => {
       // INSERT...SELECT は `b.deleted_at IS NULL` を要求するため、この1組だけが
       // スキップされる(§設計決定6)。
       await db.update(notes).set({ deletedAt: new Date() }).where(eq(notes.id, candidateId));
-      release([{ candidateId, type: "other", direction: "none", description: "d", relatedness: 0.5 }]);
+      release([
+        { candidateId, type: "other", direction: "none", description: "d", relatedness: 0.5 },
+      ]);
 
       await expect(processPromise).resolves.toBeUndefined();
 
@@ -795,7 +806,9 @@ describe("note-enrichment 統合テスト(ジョブ処理ロジック)", () => {
       await invoked;
 
       await db.update(notes).set({ deletedAt: new Date() }).where(eq(notes.id, sourceId));
-      release([{ candidateId, type: "other", direction: "none", description: "d", relatedness: 0.5 }]);
+      release([
+        { candidateId, type: "other", direction: "none", description: "d", relatedness: 0.5 },
+      ]);
 
       await expect(processPromise).resolves.toBeUndefined();
 
@@ -827,7 +840,9 @@ describe("note-enrichment 統合テスト(ジョブ処理ロジック)", () => {
       await db.execute(
         sql`UPDATE notes SET embedding_fingerprint = ${"changed-during-judge-fingerprint"} WHERE id = ${sourceId}`,
       );
-      release([{ candidateId, type: "other", direction: "none", description: "d", relatedness: 0.5 }]);
+      release([
+        { candidateId, type: "other", direction: "none", description: "d", relatedness: 0.5 },
+      ]);
 
       await expect(processPromise).resolves.toBeUndefined();
 
@@ -907,7 +922,13 @@ describe("note-enrichment 統合テスト(ジョブ処理ロジック)", () => {
       const sourceId = await insertMemoNote({ title: "重複防止・内容更新テストのsource" });
       embedMock.mockResolvedValueOnce(buildSignatureVector(6001));
       relationJudgeMock.mockResolvedValueOnce([
-        { candidateId, type: "other", direction: "none", description: "初回説明", relatedness: 0.3 },
+        {
+          candidateId,
+          type: "other",
+          direction: "none",
+          description: "初回説明",
+          relatedness: 0.3,
+        },
       ] satisfies RelationJudgeResultItem[]);
 
       await noteEnrichmentProcessor.process(makeEnrichmentJob({ noteId: sourceId }));
@@ -956,7 +977,13 @@ describe("note-enrichment 統合テスト(ジョブ処理ロジック)", () => {
       const sourceId = await insertMemoNote({ title: "論理削除エッジ非復活テストのsource" });
       embedMock.mockResolvedValueOnce(buildSignatureVector(6002));
       relationJudgeMock.mockResolvedValueOnce([
-        { candidateId, type: "other", direction: "none", description: "削除前の説明", relatedness: 0.5 },
+        {
+          candidateId,
+          type: "other",
+          direction: "none",
+          description: "削除前の説明",
+          relatedness: 0.5,
+        },
       ] satisfies RelationJudgeResultItem[]);
       await noteEnrichmentProcessor.process(makeEnrichmentJob({ noteId: sourceId }));
       const created = await fetchRelationRows(sourceId, candidateId);
@@ -964,14 +991,20 @@ describe("note-enrichment 統合テスト(ジョブ処理ロジック)", () => {
 
       // F-22/M3(エッジのユーザー無効化)は本ユニットのスコープ外で API・UI とも未実装のため、
       // 論理削除済みエッジの状態を直接 note_relations.deleted_at で再現する。
-      await db.update(noteRelations).set({ deletedAt: new Date() }).where(eq(noteRelations.id, created[0].id));
+      await db
+        .update(noteRelations)
+        .set({ deletedAt: new Date() })
+        .where(eq(noteRelations.id, created[0].id));
 
       // 内容(embedding_fingerprint)は変えずに relation_status のみ pending に戻して
       // 再判定を強制する。
       const snapshot = await fetchEnrichmentRow(sourceId);
       await db
         .update(notes)
-        .set({ relationStatus: "pending", relationFingerprint: snapshot?.embedding_fingerprint ?? null })
+        .set({
+          relationStatus: "pending",
+          relationFingerprint: snapshot?.embedding_fingerprint ?? null,
+        })
         .where(eq(notes.id, sourceId));
       relationJudgeMock.mockResolvedValueOnce([
         {

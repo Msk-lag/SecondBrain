@@ -569,6 +569,31 @@ describe("runRelationStage", () => {
     expectRelationCasUpdate(markFailedSqlText);
   });
 
+  it("markRelationFailed の UPDATE が CAS 不一致(affected rows 0)を返しても例外にならず正常終了する(手順3・4のトランザクションが遅れて先に completed へ遷移した等の並行更新を想定。§設計決定5 手順5 のコメント参照)", async () => {
+    const executeSpy = vi.fn();
+    const db = createFakeDb({
+      executeQueue: [
+        [[casRow()], []],
+        [{ affectedRows: 1 }, []],
+        [[candidateRow({ id: "candidate-1" })], []],
+        [{ affectedRows: 0 }, []],
+      ],
+      executeSpy,
+    });
+    const { client } = createFakeJudgeClient(new RelationJudgeError("structural_invalid"));
+
+    await expect(
+      runRelationStage(db, client, NOTE_ID, FINGERPRINT, SOURCE, false),
+    ).resolves.toBeUndefined();
+
+    expect(executeSpy).toHaveBeenCalledTimes(4);
+    const markFailedSqlText = extractSqlText(executeSpy.mock.calls[3][0]);
+    expect(markFailedSqlText).toContain("relation_status = 'failed'");
+    // S1/S2: affected rows 0 でも markRelationFailed 自体は専用 CAS・updated_at 固定を満たす
+    // UPDATE を発行していること。
+    expectRelationCasUpdate(markFailedSqlText);
+  });
+
   it("Claude 応答が一過性エラー(RelationJudgeError, 再試行対象)かつ非最終試行の場合、re-throw する(次の試行へ委ねる)", async () => {
     const executeSpy = vi.fn();
     const db = createFakeDb({
