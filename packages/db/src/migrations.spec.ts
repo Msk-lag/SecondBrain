@@ -258,6 +258,118 @@ describe("enrichment_status 列の既存行バックフィル(0005。0004 の列
   });
 });
 
+describe("notes テーブル拡張(M1-4b 関係判定ステージ)のマイグレーション SQL", () => {
+  const sql = readAllMigrationSql();
+
+  it("relation_status が pending/completed/failed の nullable な enum である", () => {
+    // pending は「関係判定中」を表す(M1-4b §設計決定2。Codex 計画レビュー指摘[1]対応)。
+    // これが無いと判定中と未判定を API が区別できず、web のポーリングが誤って停止する。
+    expect(sql).toMatch(/ADD `relation_status` enum\('pending','completed','failed'\);/i);
+  });
+
+  it("relation_fingerprint が nullable な varchar(64) である", () => {
+    expect(sql).toMatch(/ADD `relation_fingerprint` varchar\(64\);/i);
+  });
+});
+
+describe("note_relations テーブル(M1-4b エッジ永続化)のマイグレーション SQL", () => {
+  const sql = readAllMigrationSql();
+
+  it("note_relations テーブルを作成している", () => {
+    expect(sql).toMatch(/CREATE TABLE `note_relations`/i);
+  });
+
+  it("id が varchar(36) の主キーである", () => {
+    expect(sql).toMatch(/CONSTRAINT `note_relations_id` PRIMARY KEY\(`id`\)/i);
+  });
+
+  it("user_id が NOT NULL かつ users への外部キー(ON DELETE 既定)である", () => {
+    // note_relations テーブル内であることを、直後の note_a_id 列との並びで特定する
+    // (users/notes の user_id 列との誤マッチを避けるため)
+    expect(sql).toMatch(
+      /`user_id` varchar\(36\) NOT NULL,\s*\n\s*`note_a_id` varchar\(36\) NOT NULL,/i,
+    );
+    expect(sql).toMatch(
+      /ALTER TABLE `note_relations` ADD CONSTRAINT `note_relations_user_id_users_id_fk` FOREIGN KEY \(`user_id`\) REFERENCES `users`\(`id`\) ON DELETE no action/i,
+    );
+  });
+
+  it("note_a_id / note_b_id / source_note_id が notes への外部キーで ON DELETE CASCADE である(purge の物理削除に追従するため)", () => {
+    expect(sql).toMatch(
+      /ALTER TABLE `note_relations` ADD CONSTRAINT `note_relations_note_a_id_notes_id_fk` FOREIGN KEY \(`note_a_id`\) REFERENCES `notes`\(`id`\) ON DELETE cascade/i,
+    );
+    expect(sql).toMatch(
+      /ALTER TABLE `note_relations` ADD CONSTRAINT `note_relations_note_b_id_notes_id_fk` FOREIGN KEY \(`note_b_id`\) REFERENCES `notes`\(`id`\) ON DELETE cascade/i,
+    );
+    expect(sql).toMatch(
+      /ALTER TABLE `note_relations` ADD CONSTRAINT `note_relations_source_note_id_notes_id_fk` FOREIGN KEY \(`source_note_id`\) REFERENCES `notes`\(`id`\) ON DELETE cascade/i,
+    );
+  });
+
+  it("relation_type が NOT NULL の varchar(32) である(7値固定語彙。DB制約はアプリ層で担保)", () => {
+    expect(sql).toMatch(/`relation_type` varchar\(32\) NOT NULL,/i);
+  });
+
+  it("type_direction が a-to-b/b-to-a/none の enum で default none である", () => {
+    expect(sql).toMatch(
+      /`type_direction` enum\('a-to-b','b-to-a','none'\) NOT NULL DEFAULT 'none'/i,
+    );
+  });
+
+  it("description が NOT NULL の varchar(500) である", () => {
+    expect(sql).toMatch(/`description` varchar\(500\) NOT NULL,/i);
+  });
+
+  it("relatedness が NOT NULL の decimal(3,2) である", () => {
+    expect(sql).toMatch(/`relatedness` decimal\(3,2\) NOT NULL,/i);
+  });
+
+  it("note_a_fingerprint / note_b_fingerprint が NOT NULL の varchar(64) である(両端の陳腐化検知用)", () => {
+    expect(sql).toMatch(/`note_a_fingerprint` varchar\(64\) NOT NULL,/i);
+    expect(sql).toMatch(/`note_b_fingerprint` varchar\(64\) NOT NULL,/i);
+  });
+
+  it("deleted_at が nullable な datetime である(論理削除。UI は M3)", () => {
+    expect(sql).toMatch(/`deleted_at` datetime,/i);
+  });
+
+  it("created_at / updated_at がデフォルト付き NOT NULL である", () => {
+    expect(sql).toMatch(
+      /CREATE TABLE `note_relations`[\s\S]*?`created_at` timestamp NOT NULL DEFAULT/i,
+    );
+    expect(sql).toMatch(
+      /CREATE TABLE `note_relations`[\s\S]*?`updated_at` timestamp NOT NULL DEFAULT \(now\(\)\) ON UPDATE CURRENT_TIMESTAMP/i,
+    );
+  });
+
+  it("UNIQUE(user_id, note_a_id, note_b_id) で逆順重複を防ぐ", () => {
+    expect(sql).toMatch(
+      /CONSTRAINT `note_relations_user_id_note_a_id_note_b_id_unique` UNIQUE\(`user_id`,`note_a_id`,`note_b_id`\)/i,
+    );
+  });
+
+  it("CHECK (note_a_id < note_b_id) で正規化をキー構造で担保する", () => {
+    expect(sql).toMatch(
+      /CONSTRAINT `note_relations_note_a_id_lt_note_b_id` CHECK\(`note_relations`\.`note_a_id` < `note_relations`\.`note_b_id`\)/i,
+    );
+  });
+
+  it("CHECK (source_note_id = note_a_id OR source_note_id = note_b_id) で source_note_id が端点であることを担保する", () => {
+    expect(sql).toMatch(
+      /CONSTRAINT `note_relations_source_note_id_is_endpoint` CHECK\(`note_relations`\.`source_note_id` = `note_relations`\.`note_a_id` or `note_relations`\.`source_note_id` = `note_relations`\.`note_b_id`\)/i,
+    );
+  });
+
+  it("note_a_id・note_b_id の単独インデックスを持つ(詳細画面・M2 の両端参照用)", () => {
+    expect(sql).toMatch(
+      /CREATE INDEX `note_relations_note_a_id_idx` ON `note_relations` \(`note_a_id`\)/i,
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX `note_relations_note_b_id_idx` ON `note_relations` \(`note_b_id`\)/i,
+    );
+  });
+});
+
 describe("concepts 列の2段階 NOT NULL 化(既存行の移行手順。§ concepts 列の NOT NULL 化 参照)", () => {
   it("1段階目: concepts を nullable な json 列として追加し、既存行を '[]' で backfill する", () => {
     const addFile = findConceptsAddMigrationFile();

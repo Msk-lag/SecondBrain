@@ -20,6 +20,18 @@ export type NoteStatus = (typeof noteStatusValues)[number];
 export const noteEnrichmentStatusValues = ["pending", "completed", "failed"] as const;
 export type NoteEnrichmentStatus = (typeof noteEnrichmentStatusValues)[number];
 
+// 関係判定(AI によるエッジ生成)ジョブの状態。NULL = 一度も判定していない
+// (M1-4b §設計決定2・§設計決定10 の状態遷移表 参照)。
+//
+// pending が必要な理由(Codex 計画レビュー指摘[1]対応): この列に pending が無いと、
+// 埋め込み完了直後〜関係判定完了までの窓(Claude 呼び出し中。最大60秒)で NULL のままとなり、
+// API 側の relationStatus 派生が not_started(終端)へ落ちて、web が初回の関係結果を
+// 受け取る前にポーリングを止めてしまう。失敗後の再試行中も同様に failed(終端)のまま
+// ポーリングが止まる。関係ステージ開始時に pending を書くことで「判定中」と
+// 「判定予定なし」を区別する。
+export const noteRelationStatusValues = ["pending", "completed", "failed"] as const;
+export type NoteRelationStatus = (typeof noteRelationStatusValues)[number];
+
 /**
  * MariaDB の JSON 型は LONGTEXT + CHECK 制約のエイリアスで、MySQL のような
  * プロトコルレベルの JSON 型フラグを持たない。そのため mysql2 ドライバは
@@ -99,6 +111,24 @@ export const notes = mysqlTable(
     embeddingFingerprint: varchar("embedding_fingerprint", { length: 64 }),
     // enrichment(埋め込み生成)ジョブの状態。NULL = 対象外/旧データ。
     enrichmentStatus: mysqlEnum("enrichment_status", noteEnrichmentStatusValues),
+    // 関係判定ジョブの状態。NULL = 一度も判定していない(M1-4b §設計決定2 参照)。既存行の
+    // backfill は行わない(NULL = 未判定を正直に表現する)。判定スキップ条件は
+    // 「completed かつ relation_fingerprint 一致」であり、pending・failed はスキップせず
+    // 次の機会に再判定する。
+    relationStatus: mysqlEnum("relation_status", noteRelationStatusValues),
+    // 最後に「試行」した関係判定の入力 fingerprint(embedding_fingerprint と同じ値域)。
+    // 成功・失敗を問わず試行時に書く(relation_status がその試行の結果を表す)。この2列の組で
+    // 「現在の内容に対する判定が、進行中か・完了か・失敗か・まだ始まっていないか」が一意に
+    // 決まり、API の relationStatus 派生(M1-4b §設計決定10 の状態遷移表)が閉じる。
+    //
+    // 「最後に成功した値」ではなく「最後に試行した値」である点が重要(Codex 計画レビュー
+    // 指摘[1]対応)。成功時のみ書く設計だと、「現在の内容で失敗した(終端。再試行しても
+    // 同じ)」と「古い内容で失敗し、現在の内容では再判定待ち(継続)」を API が区別できず、
+    // ポーリングを止めるべき場面で回し続ける/回すべき場面で止める、の両方が起きる。
+    //
+    // 候補0件・全候補 related=false の場合も completed として記録し、無変更再保存での
+    // Claude 再呼び出しを防ぐ。
+    relationFingerprint: varchar("relation_fingerprint", { length: 64 }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
   },

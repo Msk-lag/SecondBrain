@@ -104,13 +104,116 @@ export type RelatedNoteItem = z.infer<typeof relatedNoteItemSchema>;
  *   続けてよい。
  * - "ready": 生成済み。`similar` が空配列でも「類似候補が無かった」ことを意味し、
  *   ポーリングを止めてよい(空配列と「未生成」を区別できることが本フィールド導入の目的)。
- * - "failed": 埋め込み生成が失敗した。`similar` には古い(生成成功時点の)候補が入り得る。
+ * - "failed": 埋め込み生成が失敗した。`similar` は常に空配列を返す(`findRelated` は
+ *   `status === 'failed'` を検出した時点で早期 return し、類似検索そのものを行わない。
+ *   古い〔生成成功時点の〕候補を保持し続けることはしない。M1-4b 実装時にコードと不一致だった
+ *   旧記述を是正した)。
  */
 export const relatedNotesStatusSchema = z.enum(["generating", "ready", "failed"]);
 export type RelatedNotesStatus = z.infer<typeof relatedNotesStatusSchema>;
 
+/**
+ * AI が判定した関係の種類(7値固定語彙。M1-4b §設計決定1 参照)。
+ *
+ * **注意: `packages/db/src/schema/note-relations.ts` の `noteRelationTypeValues` と
+ * 値を二重管理している。** `packages/shared` は `packages/db` に依存していない
+ * (`packages/shared/package.json` に `@secondbrain/db` が無い)ため import できず、
+ * ここで再定義する。**語彙を変更する場合は両方のファイルを必ず同時に直すこと。**
+ * AI 出力がこれ以外の場合は worker 側の応答境界検証で "other" へ丸められる
+ * (この場合 typeDirection は "none" になる)。
+ */
+export const noteRelationTypeValues = [
+  "same-theme",
+  "cause-solution",
+  "claim-counter",
+  "concept-hierarchy",
+  "tech-example",
+  "problem-remedy",
+  "other",
+] as const;
+export const noteRelationTypeSchema = z.enum(noteRelationTypeValues);
+export type NoteRelationType = z.infer<typeof noteRelationTypeSchema>;
+
+/**
+ * 関係の向き(**API 消費者〔詳細画面のノート〕視点へ変換済み**。DB の `type_direction`
+ * (a-to-b/b-to-a/none。note_a/note_b という正規化上の役割基準)をそのまま露出しない
+ * (M1-4b 計画の指示。相手ノート ID だけでは a/b どちらの役割かを web が判断できないため)。
+ *
+ * - "outgoing": 詳細画面のノートが種類の左項の役割を持つ(例: cause-solution で
+ *   このノートが原因側)
+ * - "incoming": 詳細画面のノートが種類の右項の役割を持つ(例: cause-solution で
+ *   このノートが解決策側)
+ * - "none": 向きの無い関係(same-theme/other)
+ *
+ * **apps/api 側の変換表**(M1-4b §設計決定1 の a/b エンコード表の逆変換。source
+ * 〔判定契機ノート〕ではなく note_a/note_b の役割のみに依存する。source が
+ * どちらであっても以下は成立する):
+ *
+ * | 詳細画面のノートが | DB の type_direction | API の typeDirection |
+ * |---|---|---|
+ * | note_a | a-to-b | outgoing |
+ * | note_a | b-to-a | incoming |
+ * | note_b | a-to-b | incoming |
+ * | note_b | b-to-a | outgoing |
+ * | — | none | none |
+ */
+export const relationTypeDirectionSchema = z.enum(["outgoing", "incoming", "none"]);
+export type RelationTypeDirection = z.infer<typeof relationTypeDirectionSchema>;
+
+/**
+ * `GET /notes/:id/related` の `relations` 配列の要素(M1-4b §設計決定1・10 参照)。
+ * 永続化された確定エッジ1件を、詳細画面のノート視点で表現する。相手ノートの識別・表示に
+ * 必要な項目は `relatedNoteItemSchema` に揃える(`distance` は持たない。関係の強さは
+ * `relatedness` で表現する)。embedding 本体は含めない(`relatedNoteItemSchema` と同じ理由)。
+ */
+export const relationItemSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  type: noteTypeSchema,
+  excerpt: z.string().nullable(),
+  relationType: noteRelationTypeSchema,
+  typeDirection: relationTypeDirectionSchema,
+  // なぜ繋がるかの説明(日本語)。DB 側 varchar(500) と同じ上限(境界検証で切り詰め済み)。
+  description: z.string().max(500),
+  // 0〜1(境界検証で clamp・小数第2位丸め済みの値のみ DB に書き込まれる)。
+  relatedness: z.number().min(0).max(1),
+});
+export type RelationItem = z.infer<typeof relationItemSchema>;
+
+/**
+ * 関係判定ステージ(`relations`)自体の可用性を表すアプリケーション概念
+ * (M1-4b §設計決定10 の状態遷移表を要約。DB の `relation_status`
+ * 〔pending/completed/failed/NULL〕をそのまま公開せず、`relation_fingerprint` との
+ * 一致判定も含めてこのアプリケーション概念へ変換する。判定ロジックは apps/api 側
+ * `notes.service.ts` 参照)。**上から順に評価する7規則から派生**:
+ *
+ * 1. 埋め込みが `generating`(`status==='generating'`) → `generating`(継続。埋め込み完了後に
+ *    関係判定が続く)
+ * 2. 埋め込みが `failed`(`status==='failed'`) → `failed`(**停止**。関係判定は永久に走らない)
+ * 3. 一度も判定されておらず投入予定も無い(`relation_status`/`relation_fingerprint` とも
+ *    NULL。M1-4a 期の既存ノート) → `not_started`(停止)
+ * 4. 現在の内容に対する判定が完了(`relation_status==='completed'` かつ fingerprint 一致)
+ *    → `ready`(停止。終端)
+ * 5. 現在の内容に対する判定が失敗(`relation_status==='failed'` かつ fingerprint 一致)
+ *    → `failed`(停止。終端)
+ * 6. 現在の内容を判定中(`relation_status==='pending'` かつ fingerprint 一致) → `generating`
+ *    (継続)
+ * 7. fingerprint 不一致(status を問わず。現在の内容に対する判定がこれから走る)
+ *    → `generating`(継続)
+ *
+ * web は `relationStatus === 'generating'` の間ポーリングを継続し、それ以外(終端)で停止する。
+ * `relations` は `relationStatus` の値によらず常に返す(永続化された確定エッジは現在の
+ * embedding 状態に依存しない事実であり、`generating`/`failed` でも古い確定結果を消さない
+ * ため。相手ノート側の関係判定でこのノートが候補側として登録されたエッジもあるため、
+ * `not_started`〔このノート自身は未判定〕でも `relations` が非空になりうる)。
+ */
+export const relationStatusSchema = z.enum(["not_started", "generating", "ready", "failed"]);
+export type RelationStatus = z.infer<typeof relationStatusSchema>;
+
 export const relatedNotesResponseSchema = z.object({
   status: relatedNotesStatusSchema,
+  relationStatus: relationStatusSchema,
+  relations: z.array(relationItemSchema),
   similar: z.array(relatedNoteItemSchema),
 });
 export type RelatedNotesResponse = z.infer<typeof relatedNotesResponseSchema>;
@@ -136,7 +239,9 @@ export const notesContract = c.router({
   // 404 方針は既存エンドポイントと同じく「対象が存在しない」「他ユーザー所有」を区別しない
   // (§ API の 404 方針 参照)。レスポンスの `status`(relatedNotesStatusSchema 参照)は
   // 「生成中で空配列」と「生成済みで類似なし」をクライアントが区別するためのフィールド
-  // (Fable 5 + Codex 独立議論 論点2 で確定)。
+  // (Fable 5 + Codex 独立議論 論点2 で確定)。`relationStatus`/`relations` は M1-4b で追加した
+  // 確定エッジ(種類・説明・関連度)群であり、`status`/`similar` とは独立した状態遷移を持つ
+  // (relationStatusSchema のコメント・M1-4b §設計決定10 参照)。
   related: {
     method: "GET",
     path: "/notes/:id/related",

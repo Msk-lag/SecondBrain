@@ -40,6 +40,13 @@ export function createApiPool(): mysql.Pool {
     user: options.user,
     password: options.password,
     database: options.database,
+    // TLS(M1-4b §設計決定12)。`dbConnectionOptionsFromEnv()` が MARIADB_SSL /
+    // MARIADB_SSL_CA から組み立てた値をそのまま渡す(未設定なら undefined = TLS 無しで
+    // 従来どおり)。**packages/db の createPool() へ ssl を足すだけでは、この関数が自前で
+    // mysql.createPool() を呼んでいるためここには効かない**(設計決定12 の初版はこの点を
+    // 誤って「全経路が createPool を通る」と記述していた)。api / worker / drizzle.config の
+    // 3経路すべてに個別に適用する必要がある。
+    ssl: options.ssl,
     connectionLimit: CONNECTION_LIMIT,
     waitForConnections: true,
     queueLimit: CONNECTION_LIMIT,

@@ -50,7 +50,9 @@ export class NotesController {
     });
   }
 
-  // 意味的に近い過去ノートの類似候補探索(M1-4a §設計決定3 参照)。404 方針は既存
+  // 意味的に近い過去ノートの類似候補探索(M1-4a §設計決定3 参照)+ 確定エッジ(relations)・
+  // relationStatus(M1-4b §設計決定10 参照)。レスポンス形の詳細・派生ロジックは
+  // NotesService.findRelated 側に集約しており、ここでは 404 判定のみを担う。404 方針は既存
   // エンドポイントと同じく「対象が存在しない」「他ユーザー所有」を区別しない。
   @TsRestHandler(notesContract.related)
   related(@CurrentUser() user: AuthenticatedUser) {

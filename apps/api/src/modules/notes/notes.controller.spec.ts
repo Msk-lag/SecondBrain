@@ -13,6 +13,7 @@ import {
   SCREENSHOT_ANALYSIS_QUEUE_NAME,
   type Note as PublicNote,
   type RelatedNoteItem,
+  type RelationItem,
 } from "@secondbrain/shared";
 import { NotesController } from "./notes.controller";
 import { NotesService } from "./notes.service";
@@ -43,6 +44,10 @@ function makeDbNote(overrides: Partial<Note> = {}): Note {
     embeddingModel: null,
     embeddingFingerprint: null,
     enrichmentStatus: null,
+    // 関係判定列(M1-4b §設計決定2 参照)。この spec は関係判定経路を対象としないため
+    // 常に未判定(null)固定。
+    relationStatus: null,
+    relationFingerprint: null,
     createdAt: new Date("2026-07-09T00:00:00.000Z"),
     updatedAt: new Date("2026-07-09T00:00:00.000Z"),
     ...overrides,
@@ -249,26 +254,84 @@ describe("NotesController", () => {
     expect(noteEnrichmentQueueMock.add).not.toHaveBeenCalled();
   });
 
-  it("GET /notes/:id/related は status と類似ノート一覧を 200 で返す(ready)", async () => {
+  it("GET /notes/:id/related は status・relationStatus・relations・similar を 200 で返す(ready)", async () => {
     const similar: RelatedNoteItem[] = [
       { id: "note-2", title: "類似ノート", type: "memo", excerpt: "要約", distance: 0.12 },
     ];
-    notesServiceMock.findRelated.mockResolvedValue({ status: "ready", similar });
+    const relations: RelationItem[] = [
+      {
+        id: "note-3",
+        title: "関係ノート",
+        type: "memo",
+        excerpt: "関係の要約",
+        relationType: "cause-solution",
+        typeDirection: "outgoing",
+        description: "説明文",
+        relatedness: 0.87,
+      },
+    ];
+    notesServiceMock.findRelated.mockResolvedValue({
+      status: "ready",
+      relationStatus: "ready",
+      relations,
+      similar,
+    });
 
     const response = await request(app.getHttpServer()).get("/notes/note-1/related");
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: "ready", similar });
+    expect(response.body).toEqual({ status: "ready", relationStatus: "ready", relations, similar });
     expect(notesServiceMock.findRelated).toHaveBeenCalledWith("user-1", "note-1");
   });
 
   it("GET /notes/:id/related は status: generating + 空配列を区別してそのまま返す(M1-4a 論点2)", async () => {
-    notesServiceMock.findRelated.mockResolvedValue({ status: "generating", similar: [] });
+    notesServiceMock.findRelated.mockResolvedValue({
+      status: "generating",
+      relationStatus: "not_started",
+      relations: [],
+      similar: [],
+    });
 
     const response = await request(app.getHttpServer()).get("/notes/note-1/related");
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: "generating", similar: [] });
+    expect(response.body).toEqual({
+      status: "generating",
+      relationStatus: "not_started",
+      relations: [],
+      similar: [],
+    });
+  });
+
+  it("GET /notes/:id/related は generating/failed でも relations を返し similar のみ空にする(M1-4b §設計決定10)", async () => {
+    const relations: RelationItem[] = [
+      {
+        id: "note-3",
+        title: "関係ノート",
+        type: "memo",
+        excerpt: "関係の要約",
+        relationType: "same-theme",
+        typeDirection: "none",
+        description: "説明文",
+        relatedness: 0.5,
+      },
+    ];
+    notesServiceMock.findRelated.mockResolvedValue({
+      status: "failed",
+      relationStatus: "failed",
+      relations,
+      similar: [],
+    });
+
+    const response = await request(app.getHttpServer()).get("/notes/note-1/related");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      status: "failed",
+      relationStatus: "failed",
+      relations,
+      similar: [],
+    });
   });
 
   it("GET /notes/:id/related は対象が無ければ 404 を返す", async () => {

@@ -363,7 +363,15 @@ describe("GET /notes/:id/related e2e(類似候補探索。M1-4a 計画 手順7)"
       .set("Authorization", `Bearer ${ownerToken}`);
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: "ready", similar: [] });
+    // M1-4b §設計決定10: relationStatus/relations が追加された(エッジ未生成のため
+    // relationStatus は「一度も判定されておらず投入予定も無い」= not_started、relations は
+    // 空配列)。
+    expect(response.body).toEqual({
+      status: "ready",
+      relationStatus: "not_started",
+      relations: [],
+      similar: [],
+    });
   });
 
   it("対象ノートが enrichment 処理中(enrichment_status='pending')の場合は status: generating + 空配列を返し、ready + 空配列(上記ケース)と区別できる(M1-4a 論点2 の主眼)", async () => {
@@ -372,7 +380,14 @@ describe("GET /notes/:id/related e2e(類似候補探索。M1-4a 計画 手順7)"
       .set("Authorization", `Bearer ${ownerToken}`);
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: "generating", similar: [] });
+    // 規則1(status==='generating' → relationStatus も generating)。relations はエッジ未生成
+    // のため空配列(M1-4b §設計決定10)。
+    expect(response.body).toEqual({
+      status: "generating",
+      relationStatus: "generating",
+      relations: [],
+      similar: [],
+    });
   });
 
   it("対象ノートが enrichment_status='failed' で古い embedding が残存していても、類似検索を行わず status: failed + 空配列を返す(Codex 最終セキュリティ監査 MEDIUM 指摘対応。ABA 問題対策)", async () => {
@@ -381,7 +396,14 @@ describe("GET /notes/:id/related e2e(類似候補探索。M1-4a 計画 手順7)"
       .set("Authorization", `Bearer ${ownerToken}`);
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: "failed", similar: [] });
+    // 規則2(status==='failed' → relationStatus も終端の failed)。relations はエッジ未生成の
+    // ため空配列(M1-4b §設計決定10)。
+    expect(response.body).toEqual({
+      status: "failed",
+      relationStatus: "failed",
+      relations: [],
+      similar: [],
+    });
   });
 
   it("存在しない ID は 404 を返す", async () => {

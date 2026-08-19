@@ -40,6 +40,11 @@ export function createWorkerPool(): mysql.Pool {
     user: options.user,
     password: options.password,
     database: options.database,
+    // TLS(M1-4b §設計決定12)。api 側の db.module.ts と同じ理由・同じ扱い
+    // (`dbConnectionOptionsFromEnv()` の値をそのまま渡す。未設定なら undefined = TLS 無し)。
+    // packages/db の createPool() はこの関数から呼ばれていないため、そちらへの追加だけでは
+    // worker の実行時プールに TLS が効かない。
+    ssl: options.ssl,
     connectionLimit: CONNECTION_LIMIT,
     waitForConnections: true,
     queueLimit: CONNECTION_LIMIT,
