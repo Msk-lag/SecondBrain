@@ -43,6 +43,13 @@
       "when": 1786870800000,
       "tag": "0005_backfill_note_enrichment_status",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1787064364336,
+      "tag": "0006_add_note_relations",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,10 @@ export function createPool(options: DbConnectionOptions): Pool {
     password: options.password,
     database: options.database,
     connectionLimit: 10,
+    // options.ssl が undefined なら mysql2 の既定(TLS 無し)のまま。RDS for MariaDB 11.8
+    // 対応(require_secure_transport 既定 1)は options.ssl(env.ts の sslOptionsFromEnv 参照)
+    // の設定で有効化する(M1-4b 計画 §設計決定12)。
+    ssl: options.ssl,
   });
 }
 

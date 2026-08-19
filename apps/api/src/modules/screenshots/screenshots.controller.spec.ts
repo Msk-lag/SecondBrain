@@ -50,6 +50,10 @@ function makeScreenshotNote(overrides: Partial<Note> = {}): Note {
     embeddingModel: null,
     embeddingFingerprint: null,
     enrichmentStatus: null,
+    // 関係判定列(M1-4b §設計決定2 参照)。この spec も関係判定経路を対象としないため
+    // 常に未判定(null)固定。
+    relationStatus: null,
+    relationFingerprint: null,
     createdAt: new Date("2026-07-11T00:00:00.000Z"),
     updatedAt: new Date("2026-07-11T00:00:00.000Z"),
     ...overrides,

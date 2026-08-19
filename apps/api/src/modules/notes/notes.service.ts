@@ -11,6 +11,7 @@ import {
   sql,
   type Database,
   type Note,
+  type NoteRelationTypeDirection,
   type NoteType,
 } from "@secondbrain/db";
 import {
@@ -18,9 +19,13 @@ import {
   type CreateMemoNoteRequest,
   type Note as PublicNote,
   type ListNotesQuery,
+  type NoteRelationType,
   type RelatedNoteItem,
   type RelatedNotesResponse,
   type RelatedNotesStatus,
+  type RelationItem,
+  type RelationStatus,
+  type RelationTypeDirection,
   type UpdateNoteRequest,
 } from "@secondbrain/shared";
 import { DRIZZLE } from "../../db/db.module";
@@ -67,6 +72,11 @@ const NOTE_COLUMNS = {
   embeddingModel: notes.embeddingModel,
   embeddingFingerprint: notes.embeddingFingerprint,
   enrichmentStatus: notes.enrichmentStatus,
+  // 関係判定ステージの状態2列(M1-4b §設計決定2 参照)。findRelated の relationStatus 派生
+  // (toRelationStatus)が読む。DB 生値は公開レスポンスへそのまま出さない
+  // (toRelatedStatus と同じ規律)。
+  relationStatus: notes.relationStatus,
+  relationFingerprint: notes.relationFingerprint,
   createdAt: notes.createdAt,
   updatedAt: notes.updatedAt,
 } as const;
@@ -86,13 +96,39 @@ interface RelatedNoteRawRow {
 }
 
 /**
+ * `GET /notes/:id/related` の `relations`(確定エッジ)取得 SQL の生行(M1-4b §設計決定10 参照)。
+ * noteAId/noteBId は「詳細画面のノートが a/b どちらの役割か」を JS 側で判定する
+ * (toApiTypeDirection)ために保持する。other.* は相手ノートの表示用列(excerpt 生成含む)、
+ * nr.* はエッジ本体の列。relatedness は decimal(3,2) 列のため mysql2 既定設定
+ * (decimalNumbers 未指定)では文字列で返る点に注意(toRelationItem で Number() へ変換する)。
+ */
+interface RelationRawRow {
+  noteAId: string;
+  noteBId: string;
+  otherId: string;
+  title: string | null;
+  type: NoteType;
+  summary: string | null;
+  body: string | null;
+  extractedText: string | null;
+  relationType: string;
+  typeDirection: NoteRelationTypeDirection;
+  description: string;
+  relatedness: string;
+}
+
+/**
  * summary → body → extracted_text の優先順で最初に非空の値を採用し、
  * EXCERPT_MAX_LENGTH を超える場合は末尾を省略記号で切り詰める
  * (計画 §担当スコープ3 参照。apps/web の getDisplayTitle と同じ「trim→slice→…」方針)。
+ * `RelatedNoteRawRow`(similar 側)・`RelationRawRow`(relations 側)の両方から呼べるよう、
+ * 必要な3列のみを構造的に受け取る(M1-4b 計画 §(d) 参照。既存関数を再利用)。
  */
-function buildExcerpt(
-  row: Pick<RelatedNoteRawRow, "summary" | "body" | "extractedText">,
-): string | null {
+function buildExcerpt(row: {
+  summary: string | null;
+  body: string | null;
+  extractedText: string | null;
+}): string | null {
   const candidates = [row.summary, row.body, row.extractedText];
   for (const candidate of candidates) {
     const trimmed = candidate?.trim();
@@ -112,6 +148,58 @@ function toRelatedNoteItem(row: RelatedNoteRawRow): RelatedNoteItem {
     type: row.type,
     excerpt: buildExcerpt(row),
     distance: row.distance,
+  };
+}
+
+/**
+ * DB の `type_direction`(a/b 正規化上の役割基準)を、詳細画面のノート視点
+ * (`outgoing`/`incoming`/`none`)へ変換する(M1-4b §設計決定1 の a/b エンコード表の逆変換。
+ * `packages/shared/src/contracts/notes.ts` の `relationTypeDirectionSchema` コメントの変換表と
+ * 同一)。**source_note_id には依存しない**(閲覧ノートが note_a か note_b かのみで決まる)。
+ * 純関数として切り出し、spec で4分岐(a-to-b×viewedIsA true/false、b-to-a×同様。none は
+ * viewedIsA を問わず none)を全て検証する(M1-4b 計画 §(c) 参照)。
+ *
+ * | 閲覧ノートが | DB | API |
+ * |---|---|---|
+ * | note_a | a-to-b | outgoing |
+ * | note_a | b-to-a | incoming |
+ * | note_b | a-to-b | incoming |
+ * | note_b | b-to-a | outgoing |
+ * | — | none | none |
+ */
+export function toApiTypeDirection(
+  dbDirection: NoteRelationTypeDirection,
+  viewedIsA: boolean,
+): RelationTypeDirection {
+  if (dbDirection === "none") {
+    return "none";
+  }
+  if (viewedIsA) {
+    return dbDirection === "a-to-b" ? "outgoing" : "incoming";
+  }
+  return dbDirection === "a-to-b" ? "incoming" : "outgoing";
+}
+
+/**
+ * `note_relations` の生行1件を、詳細画面のノート視点の `RelationItem` へ変換する
+ * (M1-4b §設計決定10 参照)。`viewedNoteId` と `row.noteAId` の一致で閲覧ノートが note_a/note_b
+ * どちらかを判定し(source_note_id は使わない)、`toApiTypeDirection` へ渡す。excerpt は
+ * similar 側(`toRelatedNoteItem`)と同じ `buildExcerpt` を再利用する(M1-4b 計画 §(d) 参照)。
+ * `relationType` は DB 側(worker の応答境界検証)で既に7値固定語彙へ正規化済みのため、
+ * ここでは再検証せずそのまま公開型へキャストする。
+ */
+function toRelationItem(row: RelationRawRow, viewedNoteId: string): RelationItem {
+  const viewedIsA = row.noteAId === viewedNoteId;
+  return {
+    id: row.otherId,
+    title: row.title,
+    type: row.type,
+    excerpt: buildExcerpt(row),
+    relationType: row.relationType as NoteRelationType,
+    typeDirection: toApiTypeDirection(row.typeDirection, viewedIsA),
+    description: row.description,
+    // decimal(3,2) は mysql2 既定設定では文字列で返る(RelationRawRow のコメント参照)。
+    relatedness: Number(row.relatedness),
   };
 }
 
@@ -154,6 +242,60 @@ function toRelatedStatus(
           return "ready";
       }
   }
+}
+
+/**
+ * DB の `relation_status`/`relation_fingerprint`(pending/completed/failed/NULL + fingerprint)を、
+ * related API が公開するアプリケーション概念 `relationStatus` へ変換する(M1-4b §設計決定10・
+ * `packages/shared/src/contracts/notes.ts` の `relationStatusSchema` コメントの7規則表と同一。
+ * **上から順に**評価し、最初に一致した規則の結果を返す)。DB 生値は公開しない
+ * (`toRelatedStatus` と同じ規律)。
+ *
+ * `status`(埋め込み・類似検索の可用性。`toRelatedStatus` の戻り値)を第2引数に取る。
+ * 規則1・2はこの `status` のみで決まり、規則3以降で初めて関係判定固有の2列を見る。
+ * 純関数として切り出し、spec で7規則すべてを個別に検証する(M1-4b 計画 §(b) 参照)。
+ */
+export function toRelationStatus(
+  target: Pick<NoteRecord, "relationStatus" | "relationFingerprint" | "embeddingFingerprint">,
+  status: RelatedNotesStatus,
+): RelationStatus {
+  // 規則1: 埋め込みが生成中 → 関係判定も継続(embedding 完了後に関係判定が続くため)。
+  if (status === "generating") {
+    return "generating";
+  }
+  // 規則2: 埋め込みが失敗 → 関係判定は永久に走らないため終端の failed(ここが重要。旧実装は
+  // status !== 'ready' を一括で generating にしていたためポーリングが止まらなかった)。
+  if (status === "failed") {
+    return "failed";
+  }
+  // ここに到達するのは status === 'ready'(埋め込み確定済み)の場合のみ。
+
+  // 規則3: 一度も判定されておらず投入予定も無い(M1-4a 期の既存ノート)。
+  if (target.relationStatus === null && target.relationFingerprint === null) {
+    return "not_started";
+  }
+
+  // fingerprint 一致 = 現在の内容に対する判定(試行 or 完了)であること。
+  const fingerprintMatches =
+    target.relationFingerprint !== null &&
+    target.relationFingerprint === target.embeddingFingerprint;
+
+  // 規則4: 現在の内容に対する判定が完了(終端)。
+  if (target.relationStatus === "completed" && fingerprintMatches) {
+    return "ready";
+  }
+  // 規則5: 現在の内容に対する判定が失敗(終端。relation_fingerprint は「最後に試行した」値の
+  // ため、これが成立するのは今の内容で判定して失敗した場合のみ)。
+  if (target.relationStatus === "failed" && fingerprintMatches) {
+    return "failed";
+  }
+  // 規則6: 現在の内容を判定中(継続)。
+  if (target.relationStatus === "pending" && fingerprintMatches) {
+    return "generating";
+  }
+  // 規則7: 上記いずれにも該当しない = fingerprint 不一致(内容が変わっており、現在の内容に
+  // 対する判定がこれから走る。status を問わない)。
+  return "generating";
 }
 
 export type MarkPendingForRetryResult =
@@ -401,9 +543,20 @@ export class NotesService {
       return null;
     }
 
-    // ↑ status は最初にここ(findOwned の結果)から決定する。類似検索が終わった後、
-    // 下記の再読み取りでこの値と比較する(このメソッド冒頭のコメント参照)。
+    // ↑ status/embeddingFingerprint/relationStatus/relationFingerprint はすべてこの
+    // findOwned 1回で読む(M1-4b §設計決定10「読み取り順序の不変条件」参照)。類似検索が
+    // 終わった後、下記の再読み取りでこの値と比較する(このメソッド冒頭のコメント参照)。
     const status = toRelatedStatus(target);
+    // relationStatus は status(埋め込みの可用性)と関係判定固有の2列から派生する
+    // (toRelationStatus の7規則。§(b) 参照)。この時点の target(最初の読み取り)を使う。
+    const relationStatus = toRelationStatus(target, status);
+
+    // relations(確定エッジ)は generating/failed/ready のいずれの分岐でも取得する
+    // (M1-4b §設計決定10)。永続化されたエッジは embedding 非依存の確定事実であり、
+    // 「古い embedding による距離計算結果を確定表示しない」という早期 return の理由は
+    // similar(embedding 依存の類似検索)にのみ当てはまるため。
+    const relations = await this.fetchRelations(userId, id);
+
     if (status === "generating" || status === "failed") {
       // 生成中(generating)は候補が存在し得ない(embedding 未確定)ため、無駄なフルスキャンを
       // 避けて即座に空配列を返す(ポーリング中の無駄なクエリを避ける)。
@@ -427,7 +580,8 @@ export class NotesService {
       // 対処で実害を大幅に減らすに留め、根本解決は将来のリファクタとする(Issue 化済み)。
       //
       // いずれの分岐も類似検索自体を行わないため、以降の再読み取りによる楽観的検証も不要。
-      return { status, similar: [] };
+      // relations は上で取得済みのものをそのまま返す(空にしない)。
+      return { status, relationStatus, relations, similar: [] };
     }
 
     // mysql2/drizzle の db.execute() は [rows, fields] のタプルを返す
@@ -465,6 +619,11 @@ export class NotesService {
     // 無い。一方 `pending` の行は一時的に候補から外れることになるが、これは「古い embedding
     // に基づく誤った類似結果を出す」より「再生成が完了するまで候補に出さない」ほうが安全
     // という判断による(意図的な挙動。フィルタ漏れではない)。
+    //
+    // NOT EXISTS で既にエッジのある相手を除外する(M1-4b §設計決定10。相手ノートが
+    // relations に既出であれば similar に重複させない)。note_relations は
+    // `note_a_id < note_b_id` に正規化されているため、`LEAST`/`GREATEST` で (n.id, id) の
+    // 正規化ペアを作って照合する(source_note_id には依存しない)。
     const result = await this.db.execute<RelatedNoteRawRow>(sql`
       SELECT
         n.id AS id,
@@ -486,6 +645,13 @@ export class NotesService {
         AND n.enrichment_status = 'completed'
         AND target.embedding IS NOT NULL
         AND n.embedding_model <=> target.embedding_model
+        AND NOT EXISTS (
+          SELECT 1 FROM note_relations AS r
+           WHERE r.deleted_at IS NULL
+             AND r.user_id = ${userId}
+             AND r.note_a_id = LEAST(n.id, ${id})
+             AND r.note_b_id = GREATEST(n.id, ${id})
+        )
       ORDER BY distance ASC
       LIMIT ${sql.raw(String(RELATED_NOTES_LIMIT))}
     `);
@@ -498,13 +664,70 @@ export class NotesService {
     // 返す(このレースは本 HIGH 指摘の対象=内容更新によるスナップショット不一致とは別種の
     // 事象であり、過剰に generating へ倒すと削除済みノートに対して永久にポーリングさせて
     // しまいかねないため)。
+    //
+    // status に加えて embedding_fingerprint も比較する(M1-4b §設計決定10。ABA 問題
+    // 〔検索中に completed → pending → completed と一巡すると前後の status が同じになり
+    // 変化を検知できない〕の実害を、スキーマ変更ゼロでほぼ消すため)。
     const recheckedTarget = await this.findOwned(userId, id);
-    if (recheckedTarget && toRelatedStatus(recheckedTarget) !== status) {
-      // 検索実行中に status が変化した = 使用した embedding が最新の内容を反映していない
-      // 可能性がある。結果を確定させず、クライアントにポーリングを継続させる。
-      return { status: "generating", similar: [] };
+    if (
+      recheckedTarget &&
+      (toRelatedStatus(recheckedTarget) !== status ||
+        recheckedTarget.embeddingFingerprint !== target.embeddingFingerprint)
+    ) {
+      // 検索実行中に status/fingerprint が変化した = 使用した embedding が最新の内容を
+      // 反映していない可能性がある。similar は確定させず generating へ倒すが、relations は
+      // embedding 非依存の確定事実なので破棄しない(上で取得済みのものをそのまま返す)。
+      //
+      // `relationStatus` も併せて `generating` へ倒す(Codex D0 レビュー HIGH 指摘対応)。
+      // 初回読み取りから派生した `relationStatus` をそのまま返すと、`status` が `generating`
+      // なのに `relationStatus` が `ready` という、状態遷移表の規則1(status が generating なら
+      // relationStatus も generating)に反する組み合わせを返しうる。実害は表示側にあり、
+      // ここで検知した変化は「判定に使われた内容が既に古い」ことを意味するため relations も
+      // 陳腐化しているが、`ready` のまま返すと web が「前回の結果です」の注記を出さず、
+      // 古い関係を確定情報として表示してしまう(§設計決定11)。
+      return { status: "generating", relationStatus: "generating", relations, similar: [] };
     }
 
-    return { status, similar: rows.map(toRelatedNoteItem) };
+    return { status, relationStatus, relations, similar: rows.map(toRelatedNoteItem) };
+  }
+
+  /**
+   * `note_relations` から対象ノートを端点とする有効な確定エッジを取得し、詳細画面のノート
+   * 視点(`RelationItem`)へ変換する(M1-4b §設計決定10 参照)。`findRelated` の全分岐
+   * (generating/failed/ready)で呼ばれるため、embedding の状態には一切依存しない。
+   *
+   * エッジ自身が `deleted_at IS NULL` であること・相手ノートが `user_id` 一致かつ
+   * `deleted_at IS NULL` であることを JOIN の WHERE で確認する(論理削除済みエッジ・相手が
+   * 論理削除済みのエッジは返さない。M1-4b 計画 §(a) 参照)。相手ノート(other)の判定に
+   * `source_note_id` は使わない(閲覧ノートが note_a か note_b かのみで決まる。
+   * `toApiTypeDirection` のコメント参照)。
+   */
+  private async fetchRelations(userId: string, id: string): Promise<RelationItem[]> {
+    const result = await this.db.execute<RelationRawRow>(sql`
+      SELECT
+        nr.note_a_id AS noteAId,
+        nr.note_b_id AS noteBId,
+        other.id AS otherId,
+        other.title AS title,
+        other.type AS type,
+        other.summary AS summary,
+        other.body AS body,
+        other.extracted_text AS extractedText,
+        nr.relation_type AS relationType,
+        nr.type_direction AS typeDirection,
+        nr.description AS description,
+        nr.relatedness AS relatedness
+      FROM note_relations AS nr
+      JOIN notes AS other
+        ON other.id = IF(nr.note_a_id = ${id}, nr.note_b_id, nr.note_a_id)
+      WHERE (nr.note_a_id = ${id} OR nr.note_b_id = ${id})
+        AND nr.user_id = ${userId}
+        AND nr.deleted_at IS NULL
+        AND other.user_id = ${userId}
+        AND other.deleted_at IS NULL
+      ORDER BY nr.relatedness DESC, nr.id ASC
+    `);
+    const rows = result[0] as unknown as RelationRawRow[];
+    return rows.map((row) => toRelationItem(row, id));
   }
 }

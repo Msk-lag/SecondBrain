@@ -88,9 +88,11 @@ export function useNoteQuery(id: string) {
  * (noteId 未確定)の間は無効化する。ノート本体の取得(useNoteQuery)とは独立したクエリの
  * ため、失敗してもノート本体の表示には影響しない(呼び出し側でセクション内に留める)。
  *
- * ポーリングはレスポンス自身の `status` を停止条件にする(Fable 5 + Codex 独立議論 論点2 で
- * 確定。relatedNotesStatusSchema 参照)。埋め込みが未生成の間(`generating`)だけポーリングを
- * 続け、`ready`/`failed` という確定した結果に遷移した時点で必ず停止する。この設計により
+ * ポーリングはレスポンス自身の `status`(Fable 5 + Codex 独立議論 論点2 で確定。
+ * relatedNotesStatusSchema 参照)に加え、`relationStatus`(M1-4b §設計決定10・11 参照)も
+ * 停止条件にする。埋め込みが未生成の間(`status === "generating"`)、または埋め込みは完了
+ * したが関係判定がまだ進行中の間(`relationStatus === "generating"`)はポーリングを続け、
+ * 両方が確定した結果(ready/failed/not_started)に遷移した時点で必ず停止する。この設計により
  * ポーリング対象は本クエリ1本で完結し、ノート本体クエリ(useNoteQuery)側の refetchInterval
  * 条件やクエリ間の協調(状態遷移を検知した invalidate 等)は不要になる。
  */
@@ -105,9 +107,15 @@ export function useRelatedNotesQuery(noteId: string) {
       return response.body;
     },
     enabled: noteId.length > 0,
+    // ポーリング停止条件は status(埋め込み・類似検索)だけでなく relationStatus(関係判定)も
+    // 見る必要がある(M1-4b §設計決定10・11)。埋め込みが完了(status !== "generating")しても
+    // 関係判定は Claude 呼び出しを伴い最大60秒かかるため、status だけを条件にすると
+    // 埋め込み完了と同時にポーリングが止まり、初回の関係判定結果(relations)が画面に
+    // 反映される前に取得が終わってしまう。
     refetchInterval: (query) => {
       const data = query.state.data;
-      return data?.status === "generating" ? PROCESSING_POLL_INTERVAL_MS : false;
+      const isPolling = data?.status === "generating" || data?.relationStatus === "generating";
+      return isPolling ? PROCESSING_POLL_INTERVAL_MS : false;
     },
   });
 }

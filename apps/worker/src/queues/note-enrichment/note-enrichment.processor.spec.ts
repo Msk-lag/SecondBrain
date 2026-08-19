@@ -7,7 +7,22 @@ import {
   computeEmbeddingFingerprint,
 } from "./note-enrichment-fingerprint";
 import type { OpenAiEmbeddingClientFactory } from "./openai-embedding.client";
+import type { RelationJudgeClient } from "./relation-judge.client";
+
+/**
+ * `runRelationStage` は `./relation-stage.ts` の spec(relation-stage.spec.ts)で個別に
+ * 網羅的に検証する。このファイルでは「processor.ts が正しい引数で関係判定ステージを
+ * 呼び出す(または呼び出さない)か」だけを検証範囲とし、関係判定ステージ自身の DB
+ * シーケンス・Claude 呼び出しはモックで切り離す(テスト境界を明確にするため)。
+ */
+const { runRelationStageMock } = vi.hoisted(() => ({ runRelationStageMock: vi.fn() }));
+vi.mock("./relation-stage", () => ({ runRelationStage: runRelationStageMock }));
+
 import { NoteEnrichmentProcessor } from "./note-enrichment.processor";
+
+/** runRelationStage はモック化されているため、実際に呼び出されることは無い。
+ * 参照透過性のためのダミー実装。 */
+const FAKE_RELATION_JUDGE_CLIENT: RelationJudgeClient = { judge: vi.fn() };
 
 type ExecuteResult = [unknown[], unknown[]] | [{ affectedRows: number }, unknown[]];
 
@@ -152,24 +167,30 @@ function extractSqlText(query: unknown): string {
 }
 
 describe("NoteEnrichmentProcessor.process", () => {
+  beforeEach(() => {
+    runRelationStageMock.mockReset().mockResolvedValue(undefined);
+  });
+
   it("ノートが存在しない場合は何もせず正常終了する(embedding client は生成しない)", async () => {
     const db = createFakeDb({ executeQueue: [[[], []]] });
     const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
 
     expect(factorySpy).not.toHaveBeenCalled();
+    expect(runRelationStageMock).not.toHaveBeenCalled();
   });
 
   it("論理削除済みノートの場合は何もせず正常終了する", async () => {
     const db = createFakeDb({ executeQueue: [[[rawRow({ deleted_at: new Date() })], []]] });
     const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
 
     expect(factorySpy).not.toHaveBeenCalled();
+    expect(runRelationStageMock).not.toHaveBeenCalled();
   });
 
   it("fingerprint が一致する場合は OpenAI を呼ばず、fingerprint・completed への UPDATE のみ行い、embedding 列は NULL 化しない(内容不変のため)", async () => {
@@ -192,7 +213,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await processor.process(createFakeJob({}));
 
@@ -202,6 +223,23 @@ describe("NoteEnrichmentProcessor.process", () => {
     const sqlText = extractSqlText(updateQuery);
     expect(sqlText).toContain("enrichment_status = 'completed'");
     expect(sqlText).not.toContain("embedding = NULL");
+
+    // M1-4b 受入条件7: fingerprint 一致分岐(冪等スキップ)でも CAS 成功時は return せず
+    // 関係判定ステージへフォールスルーする(初版 draft のここで return するバグの回帰テスト)。
+    expect(runRelationStageMock).toHaveBeenCalledTimes(1);
+    expect(runRelationStageMock).toHaveBeenCalledWith(
+      db,
+      FAKE_RELATION_JUDGE_CLIENT,
+      VALID_NOTE_ID,
+      fingerprint,
+      {
+        title: stored.title,
+        summary: stored.summary,
+        body: stored.body,
+        extractedText: stored.extracted_text,
+      },
+      false,
+    );
   });
 
   it("入力が実質空(全フィールド空)の場合は OpenAI を呼ばず、fingerprint・completed への UPDATE のみ行う", async () => {
@@ -226,12 +264,16 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await processor.process(createFakeJob({}));
 
     expect(factorySpy).not.toHaveBeenCalled();
     expect(executeSpy).toHaveBeenCalledTimes(2);
+    // 埋め込みが無い(候補にも判定にもならない)ため関係判定ステージは呼ばない
+    // (§設計決定4)。completeWithClearedEmbedding 自身が関係状態も終端させる
+    // (下記の別テストで UPDATE 文の内容を検証する)。
+    expect(runRelationStageMock).not.toHaveBeenCalled();
   });
 
   it("以前に embedding が生成済みのノートが、更新で入力が実質空へ変化した場合、embedding・embedding_model を NULL 化する UPDATE を発行する(空内容のノートが古い埋め込みで類似候補に出続けないようにするため)", async () => {
@@ -259,7 +301,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await processor.process(createFakeJob({}));
 
@@ -270,6 +312,12 @@ describe("NoteEnrichmentProcessor.process", () => {
     expect(sqlText).toContain("embedding = NULL");
     expect(sqlText).toContain("embedding_model = NULL");
     expect(sqlText).toContain("enrichment_status = 'completed'");
+    // M1-4b §設計決定4: completeWithClearedEmbedding は同一 UPDATE で関係状態も終端させる
+    // (これをしないと relationStatus が永久に generating になり web のポーリングが
+    // 止まらなくなる。Codex 計画レビュー指摘[1])。
+    expect(sqlText).toContain("relation_status = 'completed'");
+    expect(sqlText).toContain("relation_fingerprint");
+    expect(runRelationStageMock).not.toHaveBeenCalled();
   });
 
   it("正常系: fingerprint 不一致・非空入力の場合、OpenAI へ正しい連結テキストを渡して埋め込みを書き戻す", async () => {
@@ -283,7 +331,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory, embed } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await processor.process(createFakeJob({}));
 
@@ -296,6 +344,27 @@ describe("NoteEnrichmentProcessor.process", () => {
     });
     expect(embed).toHaveBeenCalledWith(expectedInput);
     expect(executeSpy).toHaveBeenCalledTimes(2);
+    // M1-4b §設計決定4: writeBackEmbedding の CAS 成功時も関係判定ステージへフォールスルーする。
+    expect(runRelationStageMock).toHaveBeenCalledTimes(1);
+    expect(runRelationStageMock).toHaveBeenCalledWith(
+      db,
+      FAKE_RELATION_JUDGE_CLIENT,
+      VALID_NOTE_ID,
+      computeEmbeddingFingerprint({
+        title: stored.title,
+        summary: stored.summary,
+        body: stored.body,
+        extractedText: stored.extracted_text,
+        tagsRaw: stored.tags,
+      }),
+      {
+        title: stored.title,
+        summary: stored.summary,
+        body: stored.body,
+        extractedText: stored.extracted_text,
+      },
+      false,
+    );
   });
 
   it("OpenAI 呼び出しが失敗し、最終試行でない場合は re-throw して failed 更新は行わない(BullMQ へ渡る例外はサニタイズ済みで原例外のメッセージを含まない。Codex 再レビュー HIGH 指摘対応)", async () => {
@@ -306,7 +375,7 @@ describe("NoteEnrichmentProcessor.process", () => {
     });
     const secret = "openai failure: sk-super-secret-api-key";
     const { factory } = createFakeEmbeddingClientFactory(new Error(secret));
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     const thrown: Error = await processor
       .process(createFakeJob({ attemptsMade: 0, attempts: 3 }))
@@ -325,6 +394,7 @@ describe("NoteEnrichmentProcessor.process", () => {
 
     // loadSnapshot の SELECT(1回)のみ。failed への UPDATE(execute の2回目)は発生しない。
     expect(executeSpy).toHaveBeenCalledTimes(1);
+    expect(runRelationStageMock).not.toHaveBeenCalled();
   });
 
   it("OpenAI 呼び出しが失敗し、最終試行の場合は re-throw せず enrichment_status='failed' で正常終了する", async () => {
@@ -337,7 +407,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory } = createFakeEmbeddingClientFactory(new Error("openai failure: secret"));
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -346,6 +416,8 @@ describe("NoteEnrichmentProcessor.process", () => {
     expect(executeSpy).toHaveBeenCalledTimes(2);
     const updateQuery: unknown = executeSpy.mock.calls[1][0];
     expect(extractSqlText(updateQuery)).toContain("enrichment_status = 'failed'");
+    // 埋め込み自体が完成しなかったため関係判定ステージは呼ばない(§設計決定4)。
+    expect(runRelationStageMock).not.toHaveBeenCalled();
   });
 
   it("OpenAI 呼び出し失敗の例外に含まれる秘密情報がログへ出力されない(回帰テスト。Codex 再レビュー HIGH 指摘対応)", async () => {
@@ -361,7 +433,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       });
       const secret = "redis unreachable: super-secret-password";
       const { factory } = createFakeEmbeddingClientFactory(new Error(secret));
-      const processor = new NoteEnrichmentProcessor(db, factory);
+      const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
       await expect(
         processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -386,7 +458,7 @@ describe("NoteEnrichmentProcessor.process", () => {
     try {
       const db = createNeverResolvingDb();
       const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-      const processor = new NoteEnrichmentProcessor(db, factory);
+      const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
       const resultPromise = processor.process(createFakeJob({ attemptsMade: 0, attempts: 3 }));
       const assertion = resultPromise.then(
@@ -416,7 +488,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory } = createFakeEmbeddingClientFactory(new Error("openai failure"));
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 }));
 
@@ -442,7 +514,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await processor.process(createFakeJob({}));
 
@@ -470,7 +542,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await expect(processor.process(createFakeJob({}))).resolves.toBeUndefined();
 
@@ -478,6 +550,9 @@ describe("NoteEnrichmentProcessor.process", () => {
     const updateQuery: unknown = executeSpy.mock.calls[1][0];
     const sqlText = extractSqlText(updateQuery);
     expect(sqlText).toContain("deleted_at IS NULL");
+    // CAS 不成立(処理中に内容が変わった/削除された)時は関係判定を行わない
+    // (使用した内容がもう最新ではないため。§設計決定4)。
+    expect(runRelationStageMock).not.toHaveBeenCalled();
   });
 
   it("markFailed の CAS はジョブ開始時スナップショットの embedding_fingerprint・enrichment_status も <=> 比較する(遅延成功した書き戻しを誤って上書きしないため。Codex D0 レビュー HIGH 指摘への対応)", async () => {
@@ -490,7 +565,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeSpy,
     });
     const { factory } = createFakeEmbeddingClientFactory(new Error("openai failure"));
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 }));
 
@@ -511,7 +586,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       ],
     });
     const { factory } = createFakeEmbeddingClientFactory(new Error("openai failure"));
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -528,7 +603,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       ],
     });
     const { factory } = createFakeEmbeddingClientFactory(new Error("openai failure"));
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -547,7 +622,7 @@ describe("NoteEnrichmentProcessor.process", () => {
     const factory = vi.fn(() => {
       throw new Error("OPENAI_API_KEY must be set to a non-empty value");
     }) as unknown as OpenAiEmbeddingClientFactory;
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     await expect(
       processor.process(createFakeJob({ attemptsMade: 2, attempts: 3 })),
@@ -567,7 +642,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeQueue: [[[rawRow({ embedding_fingerprint: "old" })], []], new Error(secret)],
     });
     const { factory } = createFakeEmbeddingClientFactory(new Error("openai failure"));
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     const thrown: Error = await processor
       .process(createFakeJob({ attemptsMade: 2, attempts: 3 }))
@@ -595,7 +670,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeQueue: [new Error(secret)],
     });
     const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     const thrown: Error = await processor
       .process(createFakeJob({ attemptsMade: 0, attempts: 3 }))
@@ -621,7 +696,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       executeQueue: [[[rawRow({ embedding_fingerprint: "old" })], []], new Error(secret)],
     });
     const { factory } = createFakeEmbeddingClientFactory();
-    const processor = new NoteEnrichmentProcessor(db, factory);
+    const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
     const thrown: Error = await processor
       .process(createFakeJob({ attemptsMade: 0, attempts: 3 }))
@@ -649,7 +724,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       const executeSpy = vi.fn();
       const db = createFakeDb({ executeQueue: [], executeSpy });
       const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-      const processor = new NoteEnrichmentProcessor(db, factory);
+      const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
       const thrown: Error = await processor.process(createFakeJob({ noteId: secret })).then(
         () => {
@@ -671,7 +746,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       const executeSpy = vi.fn();
       const db = createFakeDb({ executeQueue: [], executeSpy });
       const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-      const processor = new NoteEnrichmentProcessor(db, factory);
+      const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
       const thrown: Error = await processor
         .process(createFakeJobWithRawData({ [secretField]: "value" }))
@@ -694,7 +769,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       const executeSpy = vi.fn();
       const db = createFakeDb({ executeQueue: [], executeSpy });
       const { factory, factorySpy } = createFakeEmbeddingClientFactory();
-      const processor = new NoteEnrichmentProcessor(db, factory);
+      const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
       const thrown: Error = await processor.process(createFakeJobWithRawData(null)).then(
         () => {
@@ -714,7 +789,7 @@ describe("NoteEnrichmentProcessor.process", () => {
       const executeSpy = vi.fn();
       const db = createFakeDb({ executeQueue: [], executeSpy });
       const { factory } = createFakeEmbeddingClientFactory();
-      const processor = new NoteEnrichmentProcessor(db, factory);
+      const processor = new NoteEnrichmentProcessor(db, factory, FAKE_RELATION_JUDGE_CLIENT);
 
       const thrown: Error = await processor
         .process(createFakeJobWithRawData({ noteId: 12345 }))

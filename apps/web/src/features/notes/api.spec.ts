@@ -105,7 +105,12 @@ describe("useRelatedNotesQuery", () => {
     ];
     vi.mocked(apiClient.notes.related).mockResolvedValue({
       status: 200,
-      body: { status: "ready", similar },
+      body: {
+        status: "ready",
+        relationStatus: "not_started",
+        relations: [],
+        similar,
+      },
       headers: new Headers(),
     });
 
@@ -153,12 +158,17 @@ describe("useRelatedNotesQuery", () => {
       vi.mocked(apiClient.notes.related)
         .mockResolvedValueOnce({
           status: 200,
-          body: { status: "generating", similar: [] },
+          body: {
+            status: "generating",
+            relationStatus: "not_started",
+            relations: [],
+            similar: [],
+          },
           headers: new Headers(),
         })
         .mockResolvedValue({
           status: 200,
-          body: { status: "ready", similar },
+          body: { status: "ready", relationStatus: "ready", relations: [], similar },
           headers: new Headers(),
         });
 
@@ -187,12 +197,17 @@ describe("useRelatedNotesQuery", () => {
       vi.mocked(apiClient.notes.related)
         .mockResolvedValueOnce({
           status: 200,
-          body: { status: "generating", similar: [] },
+          body: {
+            status: "generating",
+            relationStatus: "not_started",
+            relations: [],
+            similar: [],
+          },
           headers: new Headers(),
         })
         .mockResolvedValue({
           status: 200,
-          body: { status: "failed", similar: [] },
+          body: { status: "failed", relationStatus: "failed", relations: [], similar: [] },
           headers: new Headers(),
         });
 
@@ -206,6 +221,44 @@ describe("useRelatedNotesQuery", () => {
       await waitFor(() => expect(result.current.data?.status).toBe("failed"));
       expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
 
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // M1-4b §設計決定10・11: 埋め込みが完了(status !== "generating")していても、関係判定が
+  // 未完了(relationStatus === "generating")の間はポーリングを継続しなければならない。
+  // これが無いと、埋め込み完了と同時にポーリングが止まり、初回の関係判定結果が
+  // 画面に反映される前にポーリングが終わってしまう(§設計決定10「必須要件」参照)。
+  it("status が ready でも relationStatus が generating の間はポーリングを継続する", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(apiClient.notes.related)
+        .mockResolvedValueOnce({
+          status: 200,
+          body: { status: "ready", relationStatus: "generating", relations: [], similar: [] },
+          headers: new Headers(),
+        })
+        .mockResolvedValue({
+          status: 200,
+          body: { status: "ready", relationStatus: "ready", relations: [], similar: [] },
+          headers: new Headers(),
+        });
+
+      const { result } = renderHook(() => useRelatedNotesQuery("note-1"), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => expect(result.current.data?.relationStatus).toBe("generating"));
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await waitFor(() => expect(result.current.data?.relationStatus).toBe("ready"));
+      expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
+
+      // relationStatus も ready に確定した後は、間隔を経過させても再取得されない。
       await vi.advanceTimersByTimeAsync(3000);
       expect(apiClient.notes.related).toHaveBeenCalledTimes(2);
     } finally {

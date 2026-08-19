@@ -1,0 +1,475 @@
+{
+  "version": "5",
+  "dialect": "mysql",
+  "id": "223be455-c0bf-444d-9b2f-8338f2da78fe",
+  "prevId": "3f9e2b71-6c1a-4a8d-9e77-2f5c8a1d4b60",
+  "tables": {
+    "users": {
+      "name": "users",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "users_id": {
+          "name": "users_id",
+          "columns": ["id"]
+        }
+      },
+      "uniqueConstraints": {
+        "users_email_unique": {
+          "name": "users_email_unique",
+          "columns": ["email"]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "notes": {
+      "name": "notes",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "enum('memo','url','screenshot')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'memo'"
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tags": {
+          "name": "tags",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "enum('pending','processing','completed','failed')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'completed'"
+        },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "image_key": {
+          "name": "image_key",
+          "type": "varchar(512)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "image_mime_type": {
+          "name": "image_mime_type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "concepts": {
+          "name": "concepts",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "extracted_text": {
+          "name": "extracted_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "processing_generation": {
+          "name": "processing_generation",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "processing_attempt_token": {
+          "name": "processing_attempt_token",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "embedding": {
+          "name": "embedding",
+          "type": "vector(1536)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "embedding_model": {
+          "name": "embedding_model",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "embedding_fingerprint": {
+          "name": "embedding_fingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enrichment_status": {
+          "name": "enrichment_status",
+          "type": "enum('pending','completed','failed')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "relation_status": {
+          "name": "relation_status",
+          "type": "enum('pending','completed','failed')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "relation_fingerprint": {
+          "name": "relation_fingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "notes_user_id_created_at_id_idx": {
+          "name": "notes_user_id_created_at_id_idx",
+          "columns": ["user_id", "created_at", "id"],
+          "isUnique": false
+        },
+        "notes_deleted_at_idx": {
+          "name": "notes_deleted_at_idx",
+          "columns": ["deleted_at"],
+          "isUnique": false
+        },
+        "notes_status_idx": {
+          "name": "notes_status_idx",
+          "columns": ["status"],
+          "isUnique": false
+        },
+        "notes_enrichment_status_idx": {
+          "name": "notes_enrichment_status_idx",
+          "columns": ["enrichment_status"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "notes_user_id_users_id_fk": {
+          "name": "notes_user_id_users_id_fk",
+          "tableFrom": "notes",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "notes_id": {
+          "name": "notes_id",
+          "columns": ["id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "note_relations": {
+      "name": "note_relations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "note_a_id": {
+          "name": "note_a_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "note_b_id": {
+          "name": "note_b_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_note_id": {
+          "name": "source_note_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "relation_type": {
+          "name": "relation_type",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type_direction": {
+          "name": "type_direction",
+          "type": "enum('a-to-b','b-to-a','none')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'none'"
+        },
+        "description": {
+          "name": "description",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "relatedness": {
+          "name": "relatedness",
+          "type": "decimal(3,2)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "note_a_fingerprint": {
+          "name": "note_a_fingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "note_b_fingerprint": {
+          "name": "note_b_fingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "note_relations_note_a_id_idx": {
+          "name": "note_relations_note_a_id_idx",
+          "columns": ["note_a_id"],
+          "isUnique": false
+        },
+        "note_relations_note_b_id_idx": {
+          "name": "note_relations_note_b_id_idx",
+          "columns": ["note_b_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "note_relations_user_id_users_id_fk": {
+          "name": "note_relations_user_id_users_id_fk",
+          "tableFrom": "note_relations",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "note_relations_note_a_id_notes_id_fk": {
+          "name": "note_relations_note_a_id_notes_id_fk",
+          "tableFrom": "note_relations",
+          "tableTo": "notes",
+          "columnsFrom": ["note_a_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "note_relations_note_b_id_notes_id_fk": {
+          "name": "note_relations_note_b_id_notes_id_fk",
+          "tableFrom": "note_relations",
+          "tableTo": "notes",
+          "columnsFrom": ["note_b_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "note_relations_source_note_id_notes_id_fk": {
+          "name": "note_relations_source_note_id_notes_id_fk",
+          "tableFrom": "note_relations",
+          "tableTo": "notes",
+          "columnsFrom": ["source_note_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "note_relations_id": {
+          "name": "note_relations_id",
+          "columns": ["id"]
+        }
+      },
+      "uniqueConstraints": {
+        "note_relations_user_id_note_a_id_note_b_id_unique": {
+          "name": "note_relations_user_id_note_a_id_note_b_id_unique",
+          "columns": ["user_id", "note_a_id", "note_b_id"]
+        }
+      },
+      "checkConstraint": {
+        "note_relations_note_a_id_lt_note_b_id": {
+          "name": "note_relations_note_a_id_lt_note_b_id",
+          "value": "`note_relations`.`note_a_id` < `note_relations`.`note_b_id`"
+        },
+        "note_relations_source_note_id_is_endpoint": {
+          "name": "note_relations_source_note_id_is_endpoint",
+          "value": "`note_relations`.`source_note_id` = `note_relations`.`note_a_id` or `note_relations`.`source_note_id` = `note_relations`.`note_b_id`"
+        }
+      }
+    }
+  },
+  "views": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "tables": {},
+    "indexes": {}
+  }
+}

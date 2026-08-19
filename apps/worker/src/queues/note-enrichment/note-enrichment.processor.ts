@@ -25,6 +25,8 @@ import {
   NoteEnrichmentInvalidPayloadError,
   toSanitizedEnrichmentError,
 } from "./sanitize-enrichment-error";
+import { RELATION_JUDGE_CLIENT, type RelationJudgeClient } from "./relation-judge.client";
+import { runRelationStage } from "./relation-stage";
 
 /**
  * notes.id は `randomUUID()`(RFC 4122 v4。apps/api/src/modules/notes/notes.service.ts 参照)で
@@ -180,6 +182,8 @@ export class NoteEnrichmentProcessor extends WorkerHost {
     @Inject(DRIZZLE) private readonly db: Database,
     @Inject(OPENAI_EMBEDDING_CLIENT_FACTORY)
     private readonly createEmbeddingClient: OpenAiEmbeddingClientFactory,
+    @Inject(RELATION_JUDGE_CLIENT)
+    private readonly relationJudgeClient: RelationJudgeClient,
   ) {
     super();
   }
@@ -225,52 +229,94 @@ export class NoteEnrichmentProcessor extends WorkerHost {
       }
 
       const fingerprint = computeEmbeddingFingerprint(snapshot);
+      let embeddingWriteOk: boolean;
 
       if (snapshot.embeddingFingerprint === fingerprint) {
         // 冪等スキップ: 保存済み fingerprint と一致(内容不変)。OpenAI API を呼ばず
         // enrichment_status のみを completed へ揃える(実装手順4 手順3 参照)。
-        await withDbTimeout(() => this.completeWithoutNewEmbedding(snapshot, fingerprint));
-        return;
-      }
-
-      if (isEmbeddingInputEmpty(snapshot)) {
+        //
+        // M1-4b §設計決定4: この分岐はもう return しない。writeBackEmbedding と同じく
+        // CAS 成否の boolean を受け取り、成功時は関係判定ステージへフォールスルーする。
+        // 初版 draft のままここで return すると、埋め込み成功 → 関係判定失敗 → リトライ
+        // → 2回目は fingerprint 一致で早期 return、という経路で関係判定に永久に
+        // 到達しなくなる(受入条件7 参照)。
+        embeddingWriteOk = await withDbTimeout(() =>
+          this.completeWithoutNewEmbedding(snapshot, fingerprint),
+        );
+      } else if (isEmbeddingInputEmpty(snapshot)) {
         // 連結入力が実質空(全フィールド空)へ変化した。API を呼ばず skip して completed と
         // するが、以前に生成された embedding が残っていると空内容のノートが古い埋め込みで
         // 類似候補に出続けてしまう(類似検索は embedding IS NOT NULL のみで絞るため)。
         // embedding・embedding_model を NULL 化して候補から正しく外す
         // (fingerprint 一致〔冪等スキップ〕の分岐とは異なり、こちらは内容が変化した結果の
         // 遷移であるため embedding 列も更新対象に含める)。
+        //
+        // M1-4b §設計決定4: 埋め込みが無い note は候補にも判定対象にもならないため、
+        // 関係判定ステージは呼ばない。ただし relation_status を呼ばずに放置すると
+        // relation_fingerprint が古いままとなり relationStatus が永久に generating に
+        // なってポーリングが止まらなくなるため、completeWithClearedEmbedding 自身が
+        // 同じ UPDATE で関係状態も completed へ終端させる(下記メソッド実装参照)。
         await withDbTimeout(() => this.completeWithClearedEmbedding(snapshot, fingerprint));
+        return;
+      } else {
+        try {
+          const inputText = buildEmbeddingInputText(snapshot);
+          const client = this.createEmbeddingClient();
+          const embedding = await client.embed(inputText);
+          embeddingWriteOk = await withDbTimeout(() =>
+            this.writeBackEmbedding(snapshot, embedding, fingerprint),
+          );
+        } catch (err) {
+          // 生の err.message / String(err) はログに出さない(OpenAI embeddings クライアント・
+          // DB ドライバの例外に接続情報等が含まれる可能性を排除する。Codex 再レビュー HIGH 指摘
+          // 対応・sanitize-enrichment-error.ts 参照)。固定メッセージ + 安全な分類(category)のみ
+          // を出力する。
+          const category = classifyEnrichmentError(err);
+          if (!isFinalAttempt) {
+            this.logger.warn(
+              `note-enrichment attempt failed, will retry noteId=${noteId} category=${category}`,
+            );
+            // 原例外はここでは re-throw するが、BullMQ へ渡る前に必ず下の外側 catch で
+            // サニタイズされる(この関数のスコープを出ない)。
+            throw err;
+          }
+          this.logger.warn(
+            `note-enrichment: final attempt failed noteId=${noteId} category=${category}`,
+          );
+          await withDbTimeout(() => this.markFailed(snapshot));
+          // ビジネス上は失敗だが、BullMQ のジョブ自体は正常終了させる(re-throw しない。
+          // screenshot-analysis.processor.ts と同じ方針)。markFailed 自体が失敗した場合は
+          // この try に catch が無いため、そのまま外側 catch へ伝播しサニタイズされる。
+          //
+          // 埋め込み自体が完成しなかったため、関係判定ステージは呼ばない(候補として使う
+          // embedding が無い/古いまま)。
+          return;
+        }
+      }
+
+      if (!embeddingWriteOk) {
+        // CAS 不成立(処理中に PUT 更新が入った)。関係判定は行わない
+        // (使用した内容がもう最新ではないため。回収バッチ・次回 enqueue が新内容で
+        // 再処理し、そちらの試行が関係判定まで到達する)。
         return;
       }
 
-      try {
-        const inputText = buildEmbeddingInputText(snapshot);
-        const client = this.createEmbeddingClient();
-        const embedding = await client.embed(inputText);
-        await withDbTimeout(() => this.writeBackEmbedding(snapshot, embedding, fingerprint));
-      } catch (err) {
-        // 生の err.message / String(err) はログに出さない(OpenAI embeddings クライアント・
-        // DB ドライバの例外に接続情報等が含まれる可能性を排除する。Codex 再レビュー HIGH 指摘
-        // 対応・sanitize-enrichment-error.ts 参照)。固定メッセージ + 安全な分類(category)のみ
-        // を出力する。
-        const category = classifyEnrichmentError(err);
-        if (!isFinalAttempt) {
-          this.logger.warn(
-            `note-enrichment attempt failed, will retry noteId=${noteId} category=${category}`,
-          );
-          // 原例外はここでは re-throw するが、BullMQ へ渡る前に必ず下の外側 catch で
-          // サニタイズされる(この関数のスコープを出ない)。
-          throw err;
-        }
-        this.logger.warn(
-          `note-enrichment: final attempt failed noteId=${noteId} category=${category}`,
-        );
-        await withDbTimeout(() => this.markFailed(snapshot));
-        // ビジネス上は失敗だが、BullMQ のジョブ自体は正常終了させる(re-throw しない。
-        // screenshot-analysis.processor.ts と同じ方針)。markFailed 自体が失敗した場合は
-        // この try に catch が無いため、そのまま外側 catch へ伝播しサニタイズされる。
-      }
+      // M1-4b §設計決定4・5: embedding の書き戻し(または冪等スキップ)が CAS 成功した
+      // 場合のみ、関係判定ステージへ進む。関係判定自身の CAS・冪等性・リトライ判定は
+      // relation-stage.ts が担う。
+      await runRelationStage(
+        this.db,
+        this.relationJudgeClient,
+        noteId,
+        fingerprint,
+        {
+          title: snapshot.title,
+          summary: snapshot.summary,
+          body: snapshot.body,
+          extractedText: snapshot.extractedText,
+        },
+        isFinalAttempt,
+      );
     } catch (err) {
       throw toSanitizedEnrichmentError(err);
     }
@@ -332,12 +378,16 @@ export class NoteEnrichmentProcessor extends WorkerHost {
    * WHERE 不一致で単に0行を更新するだけであり、この関数は何もせず正常に return する
    * (enrichment_status='pending' は PUT 側が既に再設定済みのため、回収バッチまたは次回
    * enqueue が新内容で再処理し収束する)。
+   *
+   * M1-4b §設計決定4: CAS の成否(affected rows > 0 か)を呼び出し元へ返すよう変更した。
+   * 呼び出し元はこれを使って「書き戻しが成功した場合のみ関係判定ステージへ進む」ことを
+   * 判定する(CAS 不成立時に古い内容で関係判定してしまうことを防ぐ)。
    */
   private async writeBackEmbedding(
     snapshot: NoteEnrichmentSnapshot,
     embedding: number[],
     fingerprint: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const vectorText = `[${embedding.join(",")}]`;
     const result = await this.db.execute(sql`
       UPDATE notes
@@ -347,25 +397,28 @@ export class NoteEnrichmentProcessor extends WorkerHost {
              enrichment_status = 'completed'
        WHERE ${snapshotCasCondition(snapshot)}
     `);
-    this.logCasMismatchIfAny("writeBackEmbedding", snapshot.id, result);
+    return this.logCasMismatchIfAny("writeBackEmbedding", snapshot.id, result);
   }
 
   /**
    * fingerprint 一致(冪等スキップ)専用。内容が不変なので embedding 列には触れず、
    * fingerprint・enrichment_status のみを揃える。同じスナップショット条件付き UPDATE で
    * 保護する(処理中に PUT で内容が変わった場合、誤って completed で上書きしないため)。
+   *
+   * M1-4b §設計決定4: writeBackEmbedding と同じく CAS の成否を返す(このメソッドの
+   * 呼び出し元も return せず関係判定ステージへフォールスルーするようになったため)。
    */
   private async completeWithoutNewEmbedding(
     snapshot: NoteEnrichmentSnapshot,
     fingerprint: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const result = await this.db.execute(sql`
       UPDATE notes
          SET embedding_fingerprint = ${fingerprint},
              enrichment_status = 'completed'
        WHERE ${snapshotCasCondition(snapshot)}
     `);
-    this.logCasMismatchIfAny("completeWithoutNewEmbedding", snapshot.id, result);
+    return this.logCasMismatchIfAny("completeWithoutNewEmbedding", snapshot.id, result);
   }
 
   /**
@@ -373,6 +426,13 @@ export class NoteEnrichmentProcessor extends WorkerHost {
    * ノートが古い埋め込みで類似候補に出続けてしまう(類似検索は `embedding IS NOT NULL` の
    * みで絞るため)。embedding・embedding_model を NULL 化して候補から正しく除外する。
    * こちらも同じスナップショット条件付き UPDATE で保護する。
+   *
+   * M1-4b §設計決定4: 関係判定ステージはこの分岐からは呼ばれない(埋め込みが無い=候補にも
+   * 判定にもならないため)。しかし relation_status/relation_fingerprint を放置すると、
+   * API 側の relationStatus 派生(旧 relation_fingerprint のまま)が `generating` に落ちて
+   * web のポーリングが永久に止まらなくなる(Codex 計画レビュー指摘[1])。そのため、この
+   * UPDATE 自身で関係状態も `completed` + 現 fingerprint へ終端させる(同一 UPDATE 文。
+   * 呼び出し元はこの終端を検証する必要が無いため戻り値は void のままとする)。
    */
   private async completeWithClearedEmbedding(
     snapshot: NoteEnrichmentSnapshot,
@@ -383,7 +443,9 @@ export class NoteEnrichmentProcessor extends WorkerHost {
          SET embedding = NULL,
              embedding_model = NULL,
              embedding_fingerprint = ${fingerprint},
-             enrichment_status = 'completed'
+             enrichment_status = 'completed',
+             relation_status = 'completed',
+             relation_fingerprint = ${fingerprint}
        WHERE ${snapshotCasCondition(snapshot)}
     `);
     this.logCasMismatchIfAny("completeWithClearedEmbedding", snapshot.id, result);
@@ -426,13 +488,36 @@ export class NoteEnrichmentProcessor extends WorkerHost {
    * 競合の発生頻度を運用時に把握できるよう、ログのみ追加する。`result[0]` の型は mysql2
    * ドライバの `db.execute()` の戻り値であり、SELECT の行配列と同様に型引数へは反映されない
    * ため、`loadSnapshot` と同じ理由で `unknown` 経由の明示キャストを行う。
+   *
+   * M1-4b §設計決定4: CAS の成否(affected rows > 0)を呼び出し元へ返すよう変更した
+   * (writeBackEmbedding・completeWithoutNewEmbedding が関係判定ステージへ進んでよいかの
+   * 判定に使う)。
+   *
+   * **この判定は mysql2 が既定で `CLIENT_FOUND_ROWS` フラグを立てていることに依存している**
+   * (Codex D0 レビューでこの点を突く指摘があり、実際の依存関係として明文化する)。MariaDB/MySQL
+   * のプロトコル既定では UPDATE の affected rows は「実際に**変更された**行数」であり、
+   * `completeWithoutNewEmbedding` のように既存値と同じ値を代入する no-op UPDATE では 0 になる。
+   * それだと「fingerprint 一致(内容不変)で再実行された場合に CAS 不成立とみなして関係判定へ
+   * 進まない」という致命的な挙動になり、関係判定の一過性エラー後のリトライが永久に判定へ
+   * 到達しなくなる。
+   *
+   * 実際には mysql2 の `getDefaultFlags()`(`lib/connection_config.js`)が既定リストに
+   * `FOUND_ROWS` を含めているため、affected rows は「**一致した**行数」となり no-op UPDATE でも
+   * 1 が返る。本リポジトリは `createApiPool` / `createWorkerPool` / `packages/db` の
+   * `createPool` のいずれでも `flags` オプションを指定していないため、この既定がそのまま効く。
+   *
+   * **したがって、接続オプションに `flags` を明示する場合は必ず `FOUND_ROWS` を含めること。**
+   * 外すと上記の経路が静かに壊れる(型エラーにもテスト失敗にもならず、関係判定だけが
+   * 生成されなくなる)。
    */
-  private logCasMismatchIfAny(operation: string, noteId: string, result: unknown): void {
+  private logCasMismatchIfAny(operation: string, noteId: string, result: unknown): boolean {
     const [header] = result as [{ affectedRows: number }, unknown];
     if (header.affectedRows === 0) {
       this.logger.debug(
         `note-enrichment: CAS mismatch (affected rows 0, likely concurrent update) operation=${operation} noteId=${noteId}`,
       );
+      return false;
     }
+    return true;
   }
 }

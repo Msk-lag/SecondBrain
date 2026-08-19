@@ -1,11 +1,15 @@
 import {
   createMemoNoteRequestSchema,
   listNotesQuerySchema,
+  noteRelationTypeSchema,
   noteSchema,
   noteStatusSchema,
   relatedNoteItemSchema,
   relatedNotesResponseSchema,
   relatedNotesStatusSchema,
+  relationItemSchema,
+  relationStatusSchema,
+  relationTypeDirectionSchema,
   screenshotAnalysisResultSchema,
   updateNoteRequestSchema,
 } from "./notes.js";
@@ -233,33 +237,187 @@ describe("relatedNotesStatusSchema", () => {
   });
 });
 
+describe("noteRelationTypeSchema", () => {
+  it("7値固定語彙をすべて受理する", () => {
+    for (const type of [
+      "same-theme",
+      "cause-solution",
+      "claim-counter",
+      "concept-hierarchy",
+      "tech-example",
+      "problem-remedy",
+      "other",
+    ]) {
+      expect(noteRelationTypeSchema.safeParse(type).success).toBe(true);
+    }
+  });
+
+  it("未知の値を拒否する(worker 側で other へ丸め済みの値のみが渡ってくる想定)", () => {
+    expect(noteRelationTypeSchema.safeParse("unknown-type").success).toBe(false);
+  });
+});
+
+describe("relationTypeDirectionSchema", () => {
+  it("outgoing/incoming/none を受理する(詳細画面のノート視点の向き)", () => {
+    for (const direction of ["outgoing", "incoming", "none"]) {
+      expect(relationTypeDirectionSchema.safeParse(direction).success).toBe(true);
+    }
+  });
+
+  it("DB の a-to-b/b-to-a をそのまま受理しない(API 側で視点変換済みであるべき)", () => {
+    for (const direction of ["a-to-b", "b-to-a"]) {
+      expect(relationTypeDirectionSchema.safeParse(direction).success).toBe(false);
+    }
+  });
+});
+
+describe("relationItemSchema", () => {
+  const valid = {
+    id: "note-2",
+    title: "関係ノート",
+    type: "memo",
+    excerpt: "抜粋テキスト",
+    relationType: "cause-solution",
+    typeDirection: "outgoing",
+    description: "原因と解決策の関係にあるため",
+    relatedness: 0.8,
+  };
+
+  it("正常な項目を受理する", () => {
+    expect(relationItemSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("title/excerpt に null を受理する(未入力のノート)", () => {
+    const result = relationItemSchema.safeParse({ ...valid, title: null, excerpt: null });
+    expect(result.success).toBe(true);
+  });
+
+  it("description が 500 文字を超える場合を拒否する(worker 側の境界検証で切り詰め済みの値のみが渡ってくる想定)", () => {
+    const result = relationItemSchema.safeParse({ ...valid, description: "a".repeat(501) });
+    expect(result.success).toBe(false);
+  });
+
+  it("relatedness が 0〜1 の範囲外の場合を拒否する", () => {
+    expect(relationItemSchema.safeParse({ ...valid, relatedness: -0.01 }).success).toBe(false);
+    expect(relationItemSchema.safeParse({ ...valid, relatedness: 1.01 }).success).toBe(false);
+  });
+
+  it("不正な relationType を拒否する", () => {
+    const result = relationItemSchema.safeParse({ ...valid, relationType: "invalid" });
+    expect(result.success).toBe(false);
+  });
+
+  it("embedding フィールドを含んでいても公開スキーマには現れない(未知キーは strip される)", () => {
+    const result = relationItemSchema.safeParse({ ...valid, embedding: [1, 2, 3] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("embedding");
+    }
+  });
+});
+
+describe("relationStatusSchema", () => {
+  it("not_started/generating/ready/failed を受理する", () => {
+    for (const status of ["not_started", "generating", "ready", "failed"]) {
+      expect(relationStatusSchema.safeParse(status).success).toBe(true);
+    }
+  });
+
+  it("DB の relation_status 生値(pending/completed 等)をそのまま受理しない(アプリ概念への変換が必須)", () => {
+    for (const status of ["pending", "completed"]) {
+      expect(relationStatusSchema.safeParse(status).success).toBe(false);
+    }
+  });
+
+  it("未知の値を拒否する", () => {
+    expect(relationStatusSchema.safeParse("unknown").success).toBe(false);
+  });
+});
+
 describe("relatedNotesResponseSchema", () => {
+  const relation = {
+    id: "note-2",
+    title: "関係ノート",
+    type: "memo",
+    excerpt: "抜粋テキスト",
+    relationType: "same-theme",
+    typeDirection: "none",
+    description: "同じテーマを扱っているため",
+    relatedness: 0.5,
+  };
+
   it("status: ready + 空配列を受理する(生成済みだが類似候補が無い場合)", () => {
-    const result = relatedNotesResponseSchema.safeParse({ status: "ready", similar: [] });
+    const result = relatedNotesResponseSchema.safeParse({
+      status: "ready",
+      relationStatus: "ready",
+      relations: [],
+      similar: [],
+    });
     expect(result.success).toBe(true);
   });
 
   it("status: generating + 空配列を受理する(未生成・生成中の場合)", () => {
-    const result = relatedNotesResponseSchema.safeParse({ status: "generating", similar: [] });
+    const result = relatedNotesResponseSchema.safeParse({
+      status: "generating",
+      relationStatus: "generating",
+      relations: [],
+      similar: [],
+    });
     expect(result.success).toBe(true);
   });
 
   it("status: failed + 非空配列を受理する(生成失敗時も既存 embedding 由来の候補を返してよい)", () => {
     const result = relatedNotesResponseSchema.safeParse({
       status: "failed",
+      relationStatus: "failed",
+      relations: [],
       similar: [{ id: "note-1", title: "旧候補", type: "memo", excerpt: "抜粋", distance: 0.2 }],
     });
     expect(result.success).toBe(true);
   });
 
+  it("relationStatus が generating/failed でも relations に非空配列を受理する(確定エッジは embedding 状態に非依存)", () => {
+    const result = relatedNotesResponseSchema.safeParse({
+      status: "generating",
+      relationStatus: "generating",
+      relations: [relation],
+      similar: [],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("status が欠けている場合を拒否する", () => {
-    const result = relatedNotesResponseSchema.safeParse({ similar: [] });
+    const result = relatedNotesResponseSchema.safeParse({
+      relationStatus: "ready",
+      relations: [],
+      similar: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("relationStatus が欠けている場合を拒否する", () => {
+    const result = relatedNotesResponseSchema.safeParse({
+      status: "ready",
+      relations: [],
+      similar: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("relations が欠けている場合を拒否する", () => {
+    const result = relatedNotesResponseSchema.safeParse({
+      status: "ready",
+      relationStatus: "ready",
+      similar: [],
+    });
     expect(result.success).toBe(false);
   });
 
   it("similar が配列以外の場合を拒否する", () => {
     const result = relatedNotesResponseSchema.safeParse({
       status: "ready",
+      relationStatus: "ready",
+      relations: [],
       similar: "not-an-array",
     });
     expect(result.success).toBe(false);
