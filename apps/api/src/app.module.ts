@@ -3,6 +3,7 @@ import { BullModule } from "@nestjs/bullmq";
 import { HealthModule } from "./modules/health/health.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { NotesModule } from "./modules/notes/notes.module";
+import { GraphModule } from "./modules/graph/graph.module";
 import { ScreenshotsModule } from "./modules/screenshots/screenshots.module";
 import { DbModule } from "./db/db.module";
 import { StorageModule } from "./storage/storage.module";
@@ -18,6 +19,7 @@ import { getApiRedisConnectionOptions } from "./config/redis.config";
     HealthModule,
     AuthModule,
     NotesModule,
+    GraphModule,
     ScreenshotsModule,
   ],
 })
