@@ -1,3 +1,5 @@
+import { NoteEnrichmentMissingApiKeyError } from "./note-enrichment-error-markers";
+
 /**
  * OpenAI embeddings エンドポイント(https://api.openai.com/v1/embeddings)への薄い
  * fetch ベースクライアント(M1-4a 計画 §設計決定5 参照)。embeddings エンドポイント1つしか
@@ -128,11 +130,16 @@ export type OpenAiEmbeddingClientFactory = () => OpenAiEmbeddingClient;
  * `useValue`(呼び出さずそのまま渡す)として DI 登録し、NoteEnrichmentProcessor が
  * ジョブ処理中に実際に埋め込みを生成する必要が生じた時点で呼び出す
  * (createClaudeVisionClientFromEnv が `useFactory` で起動時に即時評価されるのとは異なる)。
+ *
+ * 未設定時は素の `Error` ではなく `NoteEnrichmentMissingApiKeyError` を投げる(Issue #70 / A-1
+ * 対応)。`sanitize-enrichment-error.ts` の `classifyEnrichmentError()` は `instanceof` のみで
+ * 分類する設計のため、素の `Error` はどのマーカー型にも該当せず `unknown_error` に落ちて
+ * 原因がログから判別できなくなっていた(バグではなく設計方針の適用漏れ)。
  */
 export function createOpenAiEmbeddingClientFromEnv(): OpenAiEmbeddingClient {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY must be set to a non-empty value");
+    throw new NoteEnrichmentMissingApiKeyError();
   }
   return new OpenAiEmbeddingClient(apiKey);
 }

@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && nest build",
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true }); require('fs').rmSync('tsconfig.build.tsbuildinfo', { force: true }); require('fs').rmSync('tsconfig.tsbuildinfo', { force: true })\" && nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
