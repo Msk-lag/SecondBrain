@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { noteRelationTypeValues, type NoteRelationType } from "@secondbrain/db";
+import { NoteEnrichmentMissingApiKeyError } from "./note-enrichment-error-markers";
 
 /**
  * Claude による関係判定クライアント(M1-4b 計画 §設計決定9 参照)。
@@ -443,11 +444,17 @@ export const RELATION_JUDGE_CLIENT = "RELATION_JUDGE_CLIENT";
  * 同じ *FromEnv ファクトリのパターン)。`ANTHROPIC_API_KEY` は screenshot-analysis と共用する
  * ため、未設定時に起動時 fail-fast させる方針も同じにする(§設計決定9「DI 登録は useFactory」
  * 参照。worker は既にこのキー無しでは起動できない)。
+ *
+ * 未設定時は素の `Error` ではなく `NoteEnrichmentMissingApiKeyError` を投げる(Issue #70 / A-1
+ * 対応。`openai-embedding.client.ts` の `createOpenAiEmbeddingClientFromEnv` と同じ穴が
+ * あったため同じマーカー型で塞ぐ)。`sanitize-enrichment-error.ts` の `classifyEnrichmentError()`
+ * は `instanceof` のみで分類する設計のため、素の `Error` はどのマーカー型にも該当せず
+ * `unknown_error` に落ちて原因がログから判別できなくなっていた。
  */
 export function createRelationJudgeClientFromEnv(): RelationJudgeClient {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEY must be set to a non-empty value");
+    throw new NoteEnrichmentMissingApiKeyError();
   }
   return new AnthropicRelationJudgeClient(apiKey);
 }

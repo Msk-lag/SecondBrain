@@ -3,6 +3,7 @@ import {
   NoteEnrichmentDbTimeoutError,
   NoteEnrichmentEnqueueTimeoutError,
   NoteEnrichmentInvalidPayloadError,
+  NoteEnrichmentMissingApiKeyError,
   SanitizedNoteEnrichmentError,
   classifyEnrichmentError,
   toSanitizedEnrichmentError,
@@ -31,6 +32,10 @@ describe("classifyEnrichmentError", () => {
     ).toBe("openai_error");
   });
 
+  it("classifies NoteEnrichmentMissingApiKeyError as missing_api_key(Issue #70 / A-1: 素の Error に落ちて unknown_error になっていた穴を塞ぐ)", () => {
+    expect(classifyEnrichmentError(new NoteEnrichmentMissingApiKeyError())).toBe("missing_api_key");
+  });
+
   it("classifies unrecognized errors as unknown_error", () => {
     expect(classifyEnrichmentError(new Error("something unexpected"))).toBe("unknown_error");
     expect(classifyEnrichmentError("not an error at all")).toBe("unknown_error");
@@ -55,6 +60,16 @@ describe("toSanitizedEnrichmentError / SanitizedNoteEnrichmentError", () => {
     expect(sanitized).toBeInstanceOf(SanitizedNoteEnrichmentError);
     expect(sanitized.category).toBe("openai_error");
     expect(sanitized.message).toBe("note enrichment openai embeddings call failed");
+  });
+
+  it("wraps NoteEnrichmentMissingApiKeyError into a SanitizedNoteEnrichmentError carrying only the missing_api_key category and a fixed message", () => {
+    const sanitized = toSanitizedEnrichmentError(new NoteEnrichmentMissingApiKeyError());
+
+    expect(sanitized).toBeInstanceOf(SanitizedNoteEnrichmentError);
+    expect(sanitized.category).toBe("missing_api_key");
+    expect(sanitized.message).toBe(
+      "note enrichment required api key environment variable is not set",
+    );
   });
 
   it("never leaks the original error's message into the sanitized result (cause も保持しない)", () => {

@@ -6,6 +6,7 @@ import {
   OPENAI_EMBEDDING_ENDPOINT,
   OPENAI_EMBEDDING_MODEL,
 } from "./openai-embedding.client";
+import { NoteEnrichmentMissingApiKeyError } from "./note-enrichment-error-markers";
 
 function validEmbeddingPayload(dimensions = OPENAI_EMBEDDING_DIMENSIONS): unknown {
   return { data: [{ embedding: Array.from({ length: dimensions }, (_, i) => i / dimensions) }] };
@@ -191,16 +192,14 @@ describe("createOpenAiEmbeddingClientFromEnv", () => {
   });
 
   it.each([undefined, "", "   "])(
-    "OPENAI_API_KEY が未設定・空・空白のみ('%s')の場合は呼び出し時に例外を投げる",
+    "OPENAI_API_KEY が未設定・空・空白のみ('%s')の場合は呼び出し時に NoteEnrichmentMissingApiKeyError を投げる(素の Error ではない。Issue #70 / A-1: classifyEnrichmentError が instanceof のみで分類するため、素の Error だと unknown_error に落ちて原因がログから判別できなくなっていた)",
     (invalid) => {
       if (invalid === undefined) {
         delete process.env.OPENAI_API_KEY;
       } else {
         process.env.OPENAI_API_KEY = invalid;
       }
-      expect(() => createOpenAiEmbeddingClientFromEnv()).toThrow(
-        /OPENAI_API_KEY must be set to a non-empty value/,
-      );
+      expect(() => createOpenAiEmbeddingClientFromEnv()).toThrow(NoteEnrichmentMissingApiKeyError);
     },
   );
 

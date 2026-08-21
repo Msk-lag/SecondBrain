@@ -10,6 +10,7 @@ import {
   type RelationJudgeCandidateInput,
   type RelationJudgeNoteInput,
 } from "./relation-judge.client";
+import { NoteEnrichmentMissingApiKeyError } from "./note-enrichment-error-markers";
 
 const { createMock, constructorMock, MockAPIError } = vi.hoisted(() => {
   class MockAPIError extends Error {
@@ -460,16 +461,14 @@ describe("createRelationJudgeClientFromEnv", () => {
   });
 
   it.each([undefined, "", "   "])(
-    "ANTHROPIC_API_KEY が未設定・空・空白のみ('%s')の場合は起動時に例外を投げる",
+    "ANTHROPIC_API_KEY が未設定・空・空白のみ('%s')の場合は起動時に NoteEnrichmentMissingApiKeyError を投げる(素の Error ではない。Issue #70 / A-1: openai-embedding.client.ts と同じ穴を同じマーカー型で塞ぐ)",
     (invalid) => {
       if (invalid === undefined) {
         delete process.env.ANTHROPIC_API_KEY;
       } else {
         process.env.ANTHROPIC_API_KEY = invalid;
       }
-      expect(() => createRelationJudgeClientFromEnv()).toThrow(
-        /ANTHROPIC_API_KEY must be set to a non-empty value/,
-      );
+      expect(() => createRelationJudgeClientFromEnv()).toThrow(NoteEnrichmentMissingApiKeyError);
     },
   );
 

@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import type { Database } from "@secondbrain/db";
 import { NoteEnrichmentDbTimeoutError } from "./sanitize-enrichment-error";
 import { RelationJudgeError } from "./relation-judge.client";
@@ -673,5 +674,98 @@ describe("runRelationStage", () => {
     );
 
     expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("再試行対象(RelationJudgeError, 非最終試行)の warn ログに RelationJudgeError.category が含まれる(Issue #70 / A-2: 分類済みの category がログ出力の境界で捨てられ、Anthropic API の 401 等の原因がログから判別できなかった問題への対応)", async () => {
+    const warnSpy = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    try {
+      const db = createFakeDb({
+        executeQueue: [
+          [[casRow()], []],
+          [{ affectedRows: 1 }, []],
+          [[candidateRow({ id: "candidate-1" })], []],
+        ],
+      });
+      const { client } = createFakeJudgeClient(new RelationJudgeError("transient"));
+
+      await expect(
+        runRelationStage(db, client, NOTE_ID, FINGERPRINT, SOURCE, false),
+      ).rejects.toBeInstanceOf(RelationJudgeError);
+
+      const loggedMessages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(loggedMessages.some((message) => message.includes("category=transient"))).toBe(true);
+      expect(loggedMessages.some((message) => message.includes("noteId=" + NOTE_ID))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("非再試行または最終試行の warn ログに RelationJudgeError.category が含まれる(同上。§設計決定9「ログ衛生」に従い message/stack は読まないため category のみを確認する)", async () => {
+    const warnSpy = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    try {
+      const executeSpy = vi.fn();
+      const db = createFakeDb({
+        executeQueue: [
+          [[casRow()], []],
+          [{ affectedRows: 1 }, []],
+          [[candidateRow({ id: "candidate-1" })], []],
+          [{ affectedRows: 1 }, []],
+        ],
+        executeSpy,
+      });
+      const { client } = createFakeJudgeClient(new RelationJudgeError("structural_invalid"));
+
+      await expect(
+        runRelationStage(db, client, NOTE_ID, FINGERPRINT, SOURCE, false),
+      ).resolves.toBeUndefined();
+
+      const loggedMessages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        loggedMessages.some((message) => message.includes("category=structural_invalid")),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("RelationJudgeError 以外(例: DB エラー由来の RelationStageCompletionRaceError)の warn ログには固定文字列 category=unknown が入る(err.message・err.stack は読まない)", async () => {
+    const warnSpy = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    try {
+      const executeSpy = vi.fn();
+      const txExecuteSpy = vi.fn();
+      const db = createFakeDb({
+        executeQueue: [
+          [[casRow()], []],
+          [{ affectedRows: 1 }, []],
+          [[candidateRow({ id: "candidate-1" })], []],
+          [{ affectedRows: 1 }, []],
+        ],
+        executeSpy,
+        txExecuteQueue: [
+          [[], []],
+          [{ affectedRows: 0 }, []],
+        ],
+        txExecuteSpy,
+      });
+      const results = [
+        {
+          candidateId: "candidate-1",
+          type: "other" as const,
+          direction: "none" as const,
+          description: "d",
+          relatedness: 0.5,
+        },
+      ];
+      const { client } = createFakeJudgeClient(results);
+
+      await expect(
+        runRelationStage(db, client, NOTE_ID, FINGERPRINT, SOURCE, true),
+      ).resolves.toBeUndefined();
+
+      const loggedMessages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(loggedMessages.some((message) => message.includes("category=unknown"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

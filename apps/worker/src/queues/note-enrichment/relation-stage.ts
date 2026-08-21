@@ -5,12 +5,31 @@ import { NoteEnrichmentDbTimeoutError } from "./sanitize-enrichment-error";
 import { findRelationCandidates, type RelationCandidate } from "./relation-candidates";
 import {
   isRelationJudgeErrorRetryable,
+  RelationJudgeError,
   type RelationJudgeClient,
   type RelationJudgeDirection,
   type RelationJudgeResultItem,
 } from "./relation-judge.client";
 
 const logger = new Logger("RelationStage");
+
+/**
+ * ログ出力用に例外の category を解決する(Issue #70 / A-2 対応)。
+ *
+ * `RelationJudgeError` は分類済みの category を持つが、それ以外(DB タイムアウト・
+ * `RelationStageCompletionRaceError` 等)は持たない。この関数は「ログに出す category を
+ * 決める」という単一の関心事だけを担い、`err.message`・`err.stack`・`String(err)` は
+ * 一切読まない方針(このファイル群のログ衛生方針。§設計決定9「ログ衛生」参照)をここへ閉じ込める。
+ *
+ * `runRelationStage` 内の三項演算子として直接書くと(catch 節=ネストレベル1の中にあるため)
+ * sonarjs/cognitive-complexity のネストペナルティが加算され、関数全体の認知的複雑度が
+ * 上限を超えてしまう。ロジック自体は単純だが、独立したモジュールレベル関数(ネストレベル0)
+ * へ切り出すことでそのペナルティを避ける。呼び出し元(runRelationStage)からしか使わないため
+ * export はしない。
+ */
+function resolveJudgeErrorCategory(err: unknown): string {
+  return err instanceof RelationJudgeError ? err.category : "unknown";
+}
 
 /**
  * `note-enrichment.processor.ts` の `withDbTimeout` と同じ実装(10秒アプリケーション
@@ -406,12 +425,19 @@ export async function runRelationStage(
     // サニタイズして BullMQ へ渡す。BullMQ の attempts 判定・リトライ挙動自体は変えない)。
     // `RelationJudgeError` 以外(DB タイムアウト・`RelationStageCompletionRaceError` 等)は
     // `isRelationJudgeErrorRetryable` の既定により再試行対象として扱う。
+    //
+    // ログには `RelationJudgeError.category`(固定 enum)のみを含める(Issue #70 / A-2 対応。
+    // 分類済みの category がログ出力の境界で捨てられており、Anthropic API の 401 等の原因が
+    // ログから判別できなくなっていた)。解決ロジックは resolveJudgeErrorCategory 参照。
+    const category = resolveJudgeErrorCategory(err);
     if (isRelationJudgeErrorRetryable(err) && !isFinalAttempt) {
-      logger.warn(`relation stage attempt failed, will retry noteId=${noteId}`);
+      logger.warn(
+        `relation stage attempt failed, will retry noteId=${noteId} category=${category}`,
+      );
       throw err;
     }
     logger.warn(
-      `relation stage: non-retryable or final attempt failure, marking relation_status='failed' noteId=${noteId}`,
+      `relation stage: non-retryable or final attempt failure, marking relation_status='failed' noteId=${noteId} category=${category}`,
     );
     await withDbTimeout(() => markRelationFailed(db, noteId, fingerprint));
     // ビジネス上は失敗だが、BullMQ のジョブ自体は正常終了させる(re-throw しない。

@@ -1,4 +1,13 @@
 import { OpenAiEmbeddingError } from "./openai-embedding.client";
+import { NoteEnrichmentMissingApiKeyError } from "./note-enrichment-error-markers";
+
+// `NoteEnrichmentMissingApiKeyError` はこのファイルで分類にしか使わないが、
+// openai-embedding.client.ts / relation-judge.client.ts の `*FromEnv` ファクトリからも
+// 参照されるため、循環 import を避けて note-enrichment-error-markers.ts に定義してある
+// (詳細は同ファイル冒頭のコメント参照)。既存コードが `import { NoteEnrichmentXxxError } from
+// "./sanitize-enrichment-error"` の形に統一されている(note-enrichment.processor.ts・
+// relation-stage.ts 等)ため、ここから re-export して import 元を分散させない。
+export { NoteEnrichmentMissingApiKeyError };
 
 /**
  * note-enrichment キュー(producer・processor 双方)向けの例外サニタイズ
@@ -18,7 +27,12 @@ import { OpenAiEmbeddingError } from "./openai-embedding.client";
  * 固定分類へ変換する」方式に倣った、note-enrichment 専用の最小実装として本ファイルを設ける。
  */
 export type NoteEnrichmentErrorCategory =
-  "enqueue_timeout" | "db_timeout" | "openai_error" | "invalid_payload" | "unknown_error";
+  | "enqueue_timeout"
+  | "db_timeout"
+  | "openai_error"
+  | "invalid_payload"
+  | "missing_api_key"
+  | "unknown_error";
 
 /**
  * `enqueueNoteEnrichment`(note-enrichment.producer.ts)の `Promise.race` によるタイムアウトが
@@ -75,6 +89,9 @@ export function classifyEnrichmentError(err: unknown): NoteEnrichmentErrorCatego
   if (err instanceof NoteEnrichmentInvalidPayloadError) {
     return "invalid_payload";
   }
+  if (err instanceof NoteEnrichmentMissingApiKeyError) {
+    return "missing_api_key";
+  }
   if (err instanceof OpenAiEmbeddingError) {
     return "openai_error";
   }
@@ -93,6 +110,7 @@ const SANITIZED_MESSAGES: Record<NoteEnrichmentErrorCategory, string> = {
   db_timeout: "note enrichment db operation timed out",
   openai_error: "note enrichment openai embeddings call failed",
   invalid_payload: "note enrichment job payload is invalid",
+  missing_api_key: "note enrichment required api key environment variable is not set",
   unknown_error: "note enrichment operation failed",
 };
 
