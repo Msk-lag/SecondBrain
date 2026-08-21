@@ -22,6 +22,26 @@ const PLACEHOLDER_PREFIXES = ["changeme", "change-me"];
  */
 const KNOWN_TEST_SECRETS = ["test-secret", "integration-test-jwt-secret"];
 
+/**
+ * JWT_SECRET に求める最小バイト長(UTF-8)。RFC 7518(JSON Web Algorithms, JWA)§3.2 は
+ * HS256 について「ハッシュ出力と同サイズ(256 ビット = 32 バイト)以上の鍵を使用しなければ
+ * ならない(MUST)」と規定しており、この値はその仕様適合を強制するための最小長である。
+ * つまりこのチェックは単なる推奨事項の強制ではなく、32 バイト未満の鍵で HS256 を運用する
+ * こと自体が JWA 仕様違反にあたる、という位置づけである。
+ *
+ * 背景: RFC 2104(HMAC)§3 は「鍵長がハッシュ出力長を下回ると強度が低下する」ことを示して
+ * おり、JWA の MUST 要件はこの HMAC 一般論を HS256 に適用したものと理解できる。
+ * `jsonwebtoken` はこの MUST をライブラリ側で自前に強制しないため、アプリケーション側で
+ * 強制するのは確立された実務である。
+ *
+ * 注意: このチェックはあくまでバイト長のみを見ており、エントロピー(推測されにくさ)は
+ * 保証しない。例えば `"a".repeat(32)` は 32 バイトあるためこのチェックを通過するが、
+ * 攻撃者にとって自明な弱い鍵である。エントロピー推定まで実装すると複雑さに見合う効果が
+ * 薄いため、実運用では鍵を `node:crypto` の `randomBytes` 等で生成する運用手順(README /
+ * Issue #66 のコメント参照)側で強い鍵を担保する方針とする。
+ */
+const MIN_SECRET_BYTE_LENGTH = 32;
+
 function isPlaceholderSecret(secret: string): boolean {
   const normalized = secret.toLowerCase();
   return PLACEHOLDER_PREFIXES.some((prefix) => normalized.startsWith(prefix));
@@ -47,6 +67,16 @@ export function getRequiredJwtSecret(): string {
     throw new Error(
       "JWT_SECRET is set to a known fixture value used by this repository's test suite. " +
         "Generate a real secret and set it before starting the server.",
+    );
+  }
+  // このチェックはプレースホルダ・既知テスト鍵の判定より後に置く。先に置いてしまうと
+  // `.env.example` のプレースホルダ(`changeme-jwt-secret`、19 バイト)がこの長さチェックで
+  // 先に弾かれ、「プレースホルダのままです」という具体的な誘導メッセージが失われてしまう。
+  // より具体的な診断を優先し、それでも該当しない場合の最後の砦として長さを検証する。
+  if (Buffer.byteLength(secret, "utf8") < MIN_SECRET_BYTE_LENGTH) {
+    throw new Error(
+      "JWT_SECRET must be at least 32 bytes. " +
+        "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     );
   }
   return secret;

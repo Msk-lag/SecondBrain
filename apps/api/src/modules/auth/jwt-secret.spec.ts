@@ -102,14 +102,41 @@ describe("getRequiredJwtSecret", () => {
   });
 
   it("正常な値の場合はその値をそのまま返す", () => {
-    process.env.JWT_SECRET = "a-real-production-secret-value";
+    process.env.JWT_SECRET = "a-real-production-secret-value-long-enough";
 
-    expect(getRequiredJwtSecret()).toBe("a-real-production-secret-value");
+    expect(getRequiredJwtSecret()).toBe("a-real-production-secret-value-long-enough");
   });
 
   it("前後に空白がある正常な値は trim して返す", () => {
-    process.env.JWT_SECRET = "  a-real-production-secret-value  ";
+    process.env.JWT_SECRET = "  a-real-production-secret-value-long-enough  ";
 
-    expect(getRequiredJwtSecret()).toBe("a-real-production-secret-value");
+    expect(getRequiredJwtSecret()).toBe("a-real-production-secret-value-long-enough");
+  });
+
+  it("JWT_SECRET が31バイトの場合は例外を投げる", () => {
+    const secret31Bytes = "a".repeat(31);
+    expect(Buffer.byteLength(secret31Bytes, "utf8")).toBe(31);
+    process.env.JWT_SECRET = secret31Bytes;
+
+    expect(() => getRequiredJwtSecret()).toThrow(/at least 32 bytes/);
+  });
+
+  it("JWT_SECRET が32バイトちょうどの場合は例外を投げずその値をそのまま返す", () => {
+    const secret32Bytes = "a".repeat(32);
+    expect(Buffer.byteLength(secret32Bytes, "utf8")).toBe(32);
+    process.env.JWT_SECRET = secret32Bytes;
+
+    expect(getRequiredJwtSecret()).toBe(secret32Bytes);
+  });
+
+  it("マルチバイト文字はバイト長(length ではない)で判定され、UTF-8で32バイト以上あれば受理される", () => {
+    // 11文字の日本語文字列 = UTF-8 で 33 バイト(1文字3バイト)。secret.length は 11 と
+    // なり閾値を下回るため、実装が誤って `.length` を使っていた場合にこのテストが落ちる。
+    const multibyteSecret = "秘密鍵を安全に管理する";
+    expect(multibyteSecret.length).toBe(11);
+    expect(Buffer.byteLength(multibyteSecret, "utf8")).toBe(33);
+    process.env.JWT_SECRET = multibyteSecret;
+
+    expect(getRequiredJwtSecret()).toBe(multibyteSecret);
   });
 });
