@@ -11,7 +11,12 @@ import { getRequiredJwtSecret } from "./jwt-secret";
     PassportModule,
     JwtModule.register({
       secret: getRequiredJwtSecret(),
-      signOptions: { expiresIn: "7d" },
+      // 署名側のアルゴリズムを HS256 に固定する。セキュリティ境界はあくまで検証側
+      // (JwtStrategy の `algorithms: ["HS256"]`)であり、署名側の固定はセキュリティ上
+      // 必須ではない。ここで明示する狙いは、発行する JWT のアルゴリズムという「発行契約」
+      // をコード上で明示し、ライブラリの既定値変更や設定変更による意図しないドリフトを
+      // 防ぐことにある。必須ではないが低コストで入れる価値があるため設定する。
+      signOptions: { expiresIn: "7d", algorithm: "HS256" },
     }),
   ],
   controllers: [AuthController],
