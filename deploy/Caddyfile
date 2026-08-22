@@ -1,0 +1,58 @@
+# SecondBrain 本番リバースプロキシ(EC2 1台構成)
+#
+# 前提:
+#   - 環境変数 SB_PUBLIC_HOST に公開ホスト名を入れて起動する
+#     例) SB_PUBLIC_HOST=secondbrain-xxx.duckdns.org
+#   - Caddy が 80/443 を待ち受け、Let's Encrypt の証明書を自動取得・自動更新する
+#     (ACME HTTP-01 検証のため 80 番をインターネットへ開けておくこと)
+#   - api は 127.0.0.1:3000 で待ち受ける(systemd 経由。外部へは公開しない)
+#   - web はビルド済み静的ファイルを /srv/secondbrain/web へ配置する
+#
+# 設計上の要点:
+#   web(SPA)と api を同一オリジンに載せるため、api は /api/* 配下へマウントする。
+#   handle_path は一致したプレフィックスを剥がしてから転送するので、api 側の
+#   ルート定義(@Controller() = ルート直下)は一切変更せずに済む。
+#   これにより CORS もミックスドコンテンツも発生しない。
+{$SB_PUBLIC_HOST} {
+	encode zstd gzip
+
+	# api へのプロキシ。/api/notes -> api から見ると /notes になる。
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	# SPA の配信。react-router(createBrowserRouter)を使っているため、
+	# /network 等のクライアントルートを直接開かれても index.html を返す必要がある。
+	handle {
+		root * /srv/secondbrain/web
+		try_files {path} /index.html
+		file_server
+	}
+
+	# HTML をキャッシュさせない。再デプロイ時に古い SPA が、既に消えた
+	# ハッシュ付きアセットを参照して白画面になるのを防ぐ。
+	#
+	# ここで「/ と /index.html」ではなく「/assets/* 以外の全て」を対象にしているのは、
+	# /network 等のクライアントルートは try_files が /index.html へ書き換えるため、
+	# 書き換え後のパスに対する matcher では捕まらないから(Codex D0 指摘 [7])。
+	# リクエストパスで判定すれば書き換え順序に依存しない。
+	# /assets/* は Vite がハッシュ付きファイル名を出すので長期キャッシュのままで安全。
+	@notasset not path /assets/*
+	header @notasset Cache-Control "no-store"
+
+	header {
+		# HTTPS を前提にした最低限の防御。Issue #66「Helmet / CSP の適用」のうち、
+		# プロキシ層で完結するものをここで満たす。
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		# サーバー実装を晒さない
+		-Server
+	}
+
+	# Content-Security-Policy は意図的に未設定のまま残している。
+	# react-force-graph は canvas / worker / blob URL を使うため、検証しないまま
+	# 制限を入れるとネットワークビュー(中心体験)が本番でだけ壊れる危険がある。
+	# 提出後に実機で挙動を確認しながら段階的に導入すること(Issue #66 に記録)。
+}

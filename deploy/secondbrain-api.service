@@ -1,0 +1,42 @@
+# SecondBrain API(NestJS)常駐ユニット
+#
+# 配置: /etc/systemd/system/secondbrain-api.service
+#   sudo cp deploy/secondbrain-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now secondbrain-api
+#
+# 環境変数はリポジトリルートの .env から読む(packages/db の loadRootEnv が
+# WorkingDirectory ではなくモジュールの実パス基準で解決するため、cwd に依存しない)。
+# dotenv は「既に設定済みの環境変数を上書きしない」ので、ここで Environment= を
+# 書いた値のほうが .env より優先される。
+[Unit]
+Description=SecondBrain API (NestJS)
+Documentation=https://github.com/Msk-lag/SecondBrain/blob/main/docs/deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Docker グループに属さない専用の非ログインユーザーで実行する。
+# ec2-user は docker グループに入れる(手順書 §4)ため、そのまま使うと
+# アプリが侵害された際に Docker ソケット経由で特権コンテナを起動でき、
+# ホストの root を取られる(Codex D0 指摘 [1])。
+User=secondbrain
+Group=secondbrain
+WorkingDirectory=/srv/secondbrain/app
+# node の絶対パスは環境で異なる。`command -v node` の結果に合わせて書き換えること
+# (nvm 経由で入れた場合は /home/ec2-user/.nvm/versions/node/vXX/bin/node 等になる)。
+# JWT_SECRET は api だけが参照する。リポジトリルートの .env ではなくここへ置くことで、
+# worker からも Git 管理下からも見えない状態を保つ。
+# 内容: JWT_SECRET=<64桁の16進数>
+# 生成: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+EnvironmentFile=/etc/secondbrain/api.env
+ExecStart=/usr/bin/node apps/api/dist/main.js
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=secondbrain-api
+
+[Install]
+WantedBy=multi-user.target
