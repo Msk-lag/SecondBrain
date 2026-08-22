@@ -1,0 +1,43 @@
+# SecondBrain Worker(BullMQ)常駐ユニット
+#
+# 配置: /etc/systemd/system/secondbrain-worker.service
+#   sudo cp deploy/secondbrain-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now secondbrain-worker
+#
+# ⚠️ このプロセスが落ちているとパイプラインは一切進まない(Issue #66 P0-4)。
+#    回収バッチ(1分間隔)も worker 上の repeatable job なので、worker が無いと
+#    鮮度保証の経路ごと消える。Restart=always は必須。
+#
+# ⚠️ 初回起動時に note-purge バッチが走り、論理削除済みデータを物理削除する
+#    (Issue #66 P1-5)。起動前に消えて困るデータが無いか確認すること。
+[Unit]
+Description=SecondBrain Worker (BullMQ)
+Documentation=https://github.com/Msk-lag/SecondBrain/blob/main/docs/deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Docker グループに属さない専用の非ログインユーザーで実行する。
+# ec2-user は docker グループに入れる(手順書 §4)ため、そのまま使うと
+# アプリが侵害された際に Docker ソケット経由で特権コンテナを起動でき、
+# ホストの root を取られる(Codex D0 指摘 [1])。
+User=secondbrain
+Group=secondbrain
+WorkingDirectory=/srv/secondbrain/app
+# AI キーは worker だけに渡す(Issue #66「OPENAI_API_KEY / ANTHROPIC_API_KEY を worker
+# のみへ注入し web/api には渡さない」)。リポジトリルートの .env には書かないこと。
+# 内容: OPENAI_API_KEY=sk-... / ANTHROPIC_API_KEY=sk-ant-...
+# 権限: sudo install -o root -g root -m 600 /dev/null /etc/secondbrain/worker.env
+# 先頭に「-」を付けていないため、ファイルが無ければ起動に失敗する(fail-closed)。
+EnvironmentFile=/etc/secondbrain/worker.env
+ExecStart=/usr/bin/node apps/worker/dist/main.js
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=secondbrain-worker
+
+[Install]
+WantedBy=multi-user.target

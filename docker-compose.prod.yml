@@ -1,0 +1,84 @@
+# SecondBrain 本番ミドルウェア(EC2 1台構成)
+#
+# 起動: リポジトリルートで
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# 開発用の docker-compose.yml との違い:
+#   - mariadb を含まない。本番の DB は RDS for MariaDB 11.8 を使う
+#     (PROJECT.md「デプロイ方式」)。接続先は .env の MARIADB_HOST 等で指定する。
+#   - それ以外(redis / minio)は開発と同じイメージ・同じ設定を使い、
+#     環境差は環境変数だけで吸収する。
+#
+# すべてのポートを 127.0.0.1 に束縛している。redis と minio(コンソール含む)は
+# インターネットへ出さず、必要なら SSH ポートフォワード経由で見る
+# (Issue #66「BullMQ / Redis の管理画面が公開されていないこと」)。
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    # 本番では再起動でキューを失わないよう AOF を有効化する(開発用との唯一の差)。
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    # healthcheck は意図的に置いていない。`mc ready local` は minio サーバー自身の
+    # コンテナ内で実行されるが、そのコンテナには alias `local` が設定されておらず
+    # (`minio-init` の alias は別コンテナの一時設定)、正常稼働中でも unhealthy に
+    # なる(Codex D0 指摘 [6])。起動順序は minio-init 側の再試行ループが担保する。
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+      MINIO_BUCKET: ${MINIO_BUCKET:?set MINIO_BUCKET in .env}
+      MINIO_APP_ACCESS_KEY: ${MINIO_APP_ACCESS_KEY:?set MINIO_APP_ACCESS_KEY in .env}
+      MINIO_APP_SECRET_KEY: ${MINIO_APP_SECRET_KEY:?set MINIO_APP_SECRET_KEY in .env}
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        # 開発用 docker-compose.yml の minio-init と同じ手順。
+        # `mc alias set` を使う理由・試行回数に上限を設ける理由は、開発用ファイル冒頭の
+        # コメント(Codex コードレビュー r7 指摘 [B-1] / [B-2])を参照。
+        MC_ALIAS_SET_MAX_ATTEMPTS=30
+        i=0
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" 2>/tmp/mc-alias-set-error; do
+          i=$$((i + 1))
+          if [ "$$i" -ge "$$MC_ALIAS_SET_MAX_ATTEMPTS" ]; then
+            echo "mc alias set failed after $$MC_ALIAS_SET_MAX_ATTEMPTS attempts:" >&2
+            cat /tmp/mc-alias-set-error >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        mc mb --ignore-existing "local/$$MINIO_BUCKET"
+        MC_ROOT_USER="$$MINIO_ROOT_USER" MC_ROOT_PASSWORD="$$MINIO_ROOT_PASSWORD" MC_APP_SECRET_KEY="$$MINIO_APP_SECRET_KEY" \
+          sh /scripts/minio-app-policy.sh http://minio:9000 local "$$MINIO_APP_ACCESS_KEY" "$$MINIO_BUCKET" secondbrain-app-policy
+
+volumes:
+  redis_data:
+  minio_data:
