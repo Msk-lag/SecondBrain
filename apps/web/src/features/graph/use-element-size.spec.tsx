@@ -33,6 +33,11 @@ class MockResizeObserver {
   trigger(contentRect: { width: number; height: number }): void {
     this.callback([{ contentRect } as unknown as ResizeObserverEntry], this);
   }
+
+  /** ブラウザの `ResizeObserver` は理論上、空配列でコールバックを呼びうる(entries[0] が無い)。 */
+  triggerEmpty(): void {
+    this.callback([], this);
+  }
 }
 
 // ref を実際の DOM 要素へアタッチするため(useElementSize は useEffect 内で
@@ -85,6 +90,26 @@ describe("useElementSize", () => {
       observer?.trigger({ width: 640, height: 480 });
     });
 
+    expect(latestSize).toEqual({ width: 640, height: 480 });
+  });
+
+  it("ResizeObserver が空配列で通知したときは size を更新しない(早期 return)", () => {
+    let latestSize: ElementSize | undefined;
+    render(<TestComponent onSize={(size) => (latestSize = size)} />);
+
+    const [observer] = MockResizeObserver.instances;
+    expect(observer).toBeDefined();
+
+    act(() => {
+      observer?.trigger({ width: 640, height: 480 });
+    });
+    expect(latestSize).toEqual({ width: 640, height: 480 });
+
+    act(() => {
+      observer?.triggerEmpty();
+    });
+
+    // entries[0] が無いため早期 return し、前の値のまま更新されない。
     expect(latestSize).toEqual({ width: 640, height: 480 });
   });
 

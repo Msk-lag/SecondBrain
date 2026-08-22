@@ -145,14 +145,28 @@ describe("NetworkPage", () => {
     expect(state.props?.graphData.links).toHaveLength(1);
   });
 
-  it("取得失敗・キャッシュ無しのときエラー Alert と再試行を表示する", async () => {
-    vi.mocked(apiClient.graph.get).mockRejectedValue(new Error("network error"));
+  it("取得失敗・キャッシュ無しのときエラー Alert と再試行を表示し、クリックで再取得する", async () => {
+    vi.mocked(apiClient.graph.get).mockRejectedValueOnce(new Error("network error"));
 
     renderPage();
 
     expect(await screen.findByText("ネットワークの取得に失敗しました。")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "再試行" })).toBeInTheDocument();
+    const retryButton = screen.getByRole("button", { name: "再試行" });
     expect(screen.queryByTestId("network-canvas-stub")).not.toBeInTheDocument();
+    const callsBeforeRetry = vi.mocked(apiClient.graph.get).mock.calls.length;
+
+    vi.mocked(apiClient.graph.get).mockResolvedValueOnce({
+      status: 200,
+      body: graphWithNodesAndEdge(),
+      headers: new Headers(),
+    });
+    const user = userEvent.setup();
+    await user.click(retryButton);
+
+    // クリックで `graphQuery.refetch()` が呼ばれ、再取得が実行されたことをキャンバス描画と
+    // 呼び出し回数の両方で確認する(退行検知)。
+    expect(await screen.findByTestId("network-canvas-stub")).toBeInTheDocument();
+    expect(vi.mocked(apiClient.graph.get).mock.calls.length).toBe(callsBeforeRetry + 1);
   });
 
   it("取得失敗でもキャッシュ済みのネットワークがあれば描画を維持し警告のみ表示する(受入条件9)", async () => {

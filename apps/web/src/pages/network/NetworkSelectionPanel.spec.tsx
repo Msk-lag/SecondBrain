@@ -214,6 +214,46 @@ describe("NetworkSelectionPanel", () => {
       expect(screen.getByText("同じテーマ")).toBeInTheDocument();
     });
 
+    it("向きがあっても役割ラベルを持たない関係種別(same-theme/other)は種別バッジのみ表示する(契約上は起こらない防御的な分岐)", async () => {
+      // `same-theme`/`other` は契約上つねに `directed === false`(=direction は "none")のため、
+      // 実データでは `direction === "outgoing"/"incoming"` と組み合わさることは無い。
+      // それでも `connectionRoleLabel` はその組み合わせに対して防御的に null を返す作りに
+      // なっているため、あえてその組み合わせを adjacency へ渡して検証する。
+      const noRoleLabelAdjacency: GraphAdjacency = new Map([
+        [
+          "n1",
+          [
+            {
+              edge: {
+                id: "e-same-theme-outgoing",
+                directed: true,
+                relationType: "same-theme",
+                description: "同じテーマの説明",
+                relatedness: 0.4,
+              },
+              otherNodeId: "n2",
+              direction: "outgoing",
+            },
+          ],
+        ],
+      ]);
+      vi.mocked(apiClient.notes.get).mockResolvedValue({
+        status: 200,
+        body: memoNote,
+        headers: new Headers(),
+      });
+
+      renderPanel({
+        selection: { type: "node", nodeId: "n1" },
+        adjacency: noRoleLabelAdjacency,
+      });
+
+      expect(await screen.findByText("接続ノード(1)")).toBeInTheDocument();
+      expect(screen.getByText("同じテーマ")).toBeInTheDocument();
+      // 役割ラベル(括弧付きテキスト)は一切出ない。
+      expect(screen.queryByText(/^\(.+\)$/)).not.toBeInTheDocument();
+    });
+
     it("接続ノードが無い場合は案内文を表示する", async () => {
       vi.mocked(apiClient.notes.get).mockResolvedValue({
         status: 200,
