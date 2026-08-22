@@ -1,4 +1,4 @@
-import { FilePlus2, Home, LogOut } from "lucide-react";
+import { FilePlus2, Home, LogOut, Share2 } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { AppSidebar } from "@/components/AppSidebar";
 import { useAuthStore } from "@/store/useAuthStore";
@@ -25,6 +25,9 @@ export function AppLayout() {
           </NavLink>
           <NavLink to="/save" className="text-ink-700" aria-label="保存">
             <FilePlus2 className="size-5" />
+          </NavLink>
+          <NavLink to="/network" className="text-ink-700" aria-label="ネットワーク">
+            <Share2 className="size-5" />
           </NavLink>
           <button
             type="button"
