@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import mysql from "mysql2/promise";
 import { drizzle } from "drizzle-orm/mysql2";
 import { sql } from "drizzle-orm";
+import { dbConnectionOptionsFromEnv } from "@secondbrain/db";
 
 interface SimilarityRow {
   label: string;
@@ -10,13 +11,13 @@ interface SimilarityRow {
 }
 
 async function main() {
-  const connection = await mysql.createConnection({
-    host: "localhost",
-    port: Number(process.env.MARIADB_PORT ?? 3306),
-    user: process.env.MARIADB_USER ?? "secondbrain",
-    password: process.env.MARIADB_PASSWORD ?? "changeme-app",
-    database: process.env.MARIADB_DATABASE ?? "secondbrain",
-  });
+  // 接続先はアプリ本体と同じ `dbConnectionOptionsFromEnv()` から取る。
+  // 以前は host を "localhost" にハードコードし TLS も渡していなかったため、
+  // 本番の RDS へ向けて実行できなかった(docs/deployment.md §1 は本スクリプトで
+  // RDS の VECTOR 対応を実測する手順になっている)。ローカルには MariaDB が
+  // 無い EC2 上では接続拒否になり、症状が「RDS で VECTOR が使えない」と
+  // 見分けづらい形で出る。
+  const connection = await mysql.createConnection(dbConnectionOptionsFromEnv());
   const db = drizzle(connection);
 
   // 実行ごとに一意なテーブル名を使う: MariaDB は一時テーブルへの VECTOR INDEX 作成を
