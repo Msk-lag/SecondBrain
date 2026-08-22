@@ -3,6 +3,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { NoteListPage } from "./pages/NoteListPage";
 import { NoteDetailPage } from "./pages/NoteDetailPage";
 import { NoteEditPage } from "./pages/NoteEditPage";
+import { NetworkPage } from "./pages/NetworkPage";
 import { SaveNotePage } from "./pages/SaveNotePage";
 import { RequireAuth } from "./components/RequireAuth";
 import { AppLayout } from "./components/AppLayout";
@@ -33,6 +34,10 @@ export const router = createBrowserRouter([
           {
             path: "/notes/:id/edit",
             element: <NoteEditPage />,
+          },
+          {
+            path: "/network",
+            element: <NetworkPage />,
           },
         ],
       },

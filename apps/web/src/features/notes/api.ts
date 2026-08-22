@@ -9,6 +9,7 @@ import {
   type UpdateNoteRequest,
 } from "@secondbrain/shared";
 import { apiClient } from "@/lib/api-client";
+import { graphKeys } from "@/features/graph/api";
 import { useAuthStore } from "@/store/useAuthStore";
 
 export const notesKeys = {
@@ -132,6 +133,9 @@ export function useCreateNoteMutation() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: notesKeys.list() });
+      // 新しいノート(=ネットワークの新しいノード)が増えるため graph クエリも
+      // invalidate する(M2-2 §設計決定6・受入条件10)。
+      void queryClient.invalidateQueries({ queryKey: graphKeys.all });
     },
   });
 }
@@ -168,6 +172,10 @@ export function useCreateScreenshotNoteMutation() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: notesKeys.list() });
+      // スクリーンショット保存も新しいノード(pending)を graph に追加するため、graph
+      // クエリも invalidate する。これが無いと、貼ってから /network にノードが出るまで
+      // 最大30秒(アイドル時ポーリング間隔)無反応になる(M2-2 §設計決定6・受入条件10)。
+      void queryClient.invalidateQueries({ queryKey: graphKeys.all });
     },
   });
 }
@@ -200,6 +208,9 @@ export function useUpdateNoteMutation(id: string) {
     onSuccess: (updated) => {
       queryClient.setQueryData(notesKeys.detail(id), updated);
       void queryClient.invalidateQueries({ queryKey: notesKeys.list() });
+      // タイトル変更等はネットワークのノードラベルにも反映されるため graph クエリも
+      // invalidate する(M2-2 §設計決定6・受入条件10)。
+      void queryClient.invalidateQueries({ queryKey: graphKeys.all });
     },
   });
 }
@@ -229,6 +240,10 @@ export function useRetryNoteMutation(id: string) {
     onSuccess: (pendingNote) => {
       queryClient.setQueryData(notesKeys.detail(id), pendingNote);
       void queryClient.invalidateQueries({ queryKey: notesKeys.list() });
+      // retry は status を pending に戻し processingNoteCount に影響するため、graph
+      // クエリも invalidate する(判定中バナー反映の遅延を防ぐ。M2-2 §設計決定6・
+      // 受入条件10)。
+      void queryClient.invalidateQueries({ queryKey: graphKeys.all });
     },
   });
 }
@@ -248,6 +263,9 @@ export function useDeleteNoteMutation() {
     onSuccess: (_data, id) => {
       queryClient.removeQueries({ queryKey: notesKeys.detail(id) });
       void queryClient.invalidateQueries({ queryKey: notesKeys.list() });
+      // 削除されたノートはネットワークのノード・関連エッジからも消えるため graph クエリも
+      // invalidate する(M2-2 §設計決定6・受入条件10)。
+      void queryClient.invalidateQueries({ queryKey: graphKeys.all });
     },
   });
 }

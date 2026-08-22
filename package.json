@@ -22,6 +22,7 @@
     "scan:secrets": "secretlint --no-gitignore \"**/*\"",
     "scan:secrets:staged": "node scripts/scan-staged-secrets.mjs",
     "poc:vector": "tsx scripts/poc/mariadb-vector-poc.ts",
+    "poc:seed-graph": "tsx scripts/poc/seed-graph-load.ts",
     "db:generate": "pnpm --filter @secondbrain/db run db:generate",
     "db:migrate": "pnpm --filter @secondbrain/db run db:migrate",
     "db:seed": "pnpm --filter @secondbrain/db run db:seed"

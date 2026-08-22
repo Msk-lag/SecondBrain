@@ -9,7 +9,7 @@ describe("AppSidebar", () => {
     useAuthStore.getState().clear();
   });
 
-  it("ホーム・保存へのナビゲーションリンクを表示する", () => {
+  it("ホーム・保存・ネットワークへのナビゲーションリンクを表示する", () => {
     render(
       <MemoryRouter>
         <AppSidebar />
@@ -18,6 +18,7 @@ describe("AppSidebar", () => {
 
     expect(screen.getByRole("link", { name: "ホーム" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "保存" })).toHaveAttribute("href", "/save");
+    expect(screen.getByRole("link", { name: "ネットワーク" })).toHaveAttribute("href", "/network");
   });
 
   it("ログアウトを選択するとトークンを破棄する", async () => {

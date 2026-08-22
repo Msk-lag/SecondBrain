@@ -1,4 +1,4 @@
-import { FilePlus2, Home, LogOut } from "lucide-react";
+import { FilePlus2, Home, LogOut, Share2 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/useAuthStore";
@@ -13,6 +13,7 @@ import {
 const navItems = [
   { to: "/", label: "ホーム", icon: Home, end: true },
   { to: "/save", label: "保存", icon: FilePlus2, end: false },
+  { to: "/network", label: "ネットワーク", icon: Share2, end: false },
 ];
 
 export function AppSidebar() {

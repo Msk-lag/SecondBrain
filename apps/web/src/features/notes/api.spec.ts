@@ -13,6 +13,7 @@ import {
   useUpdateNoteMutation,
 } from "./api";
 import { apiClient } from "@/lib/api-client";
+import { graphKeys } from "@/features/graph/api";
 import { useAuthStore } from "@/store/useAuthStore";
 
 vi.mock("@/lib/api-client", () => ({
@@ -281,6 +282,28 @@ describe("useCreateNoteMutation", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toEqual(note);
   });
+
+  it("成功時、一覧に加えて graph クエリも invalidate する(M2-2 受入条件10)", async () => {
+    vi.mocked(apiClient.notes.create).mockResolvedValue({
+      status: 201,
+      body: note,
+      headers: new Headers(),
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useCreateNoteMutation(), { wrapper });
+    result.current.mutate({ body: "本文" });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes", "list"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: graphKeys.all });
+  });
 });
 
 describe("useCreateScreenshotNoteMutation", () => {
@@ -310,6 +333,27 @@ describe("useCreateScreenshotNoteMutation", () => {
 
     const [, requestInit] = vi.mocked(fetch).mock.calls[0];
     expect(requestInit?.headers).toMatchObject({ Authorization: "Bearer token-123" });
+  });
+
+  it("成功時、一覧に加えて graph クエリも invalidate する(M2-2 受入条件10)", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify(pendingScreenshotNote), { status: 201 }),
+    );
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useCreateScreenshotNoteMutation(), { wrapper });
+    const file = new File(["x"], "screenshot.png", { type: "image/png" });
+    result.current.mutate(file);
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes", "list"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: graphKeys.all });
   });
 
   it("失敗レスポンスのメッセージでエラーを投げる", async () => {
@@ -359,6 +403,28 @@ describe("useUpdateNoteMutation", () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toBe("screenshot ノートの本文は編集できません。");
   });
+
+  it("成功時、一覧に加えて graph クエリも invalidate する(M2-2 受入条件10)", async () => {
+    vi.mocked(apiClient.notes.update).mockResolvedValue({
+      status: 200,
+      body: note,
+      headers: new Headers(),
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useUpdateNoteMutation("note-1"), { wrapper });
+    result.current.mutate({ title: "新タイトル" });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes", "list"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: graphKeys.all });
+  });
 });
 
 describe("useRetryNoteMutation", () => {
@@ -382,6 +448,28 @@ describe("useRetryNoteMutation", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(queryClient.getQueryData(["notes", "detail", "note-2"])).toEqual(pendingScreenshotNote);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes", "list"] });
+  });
+
+  it("成功時、一覧に加えて graph クエリも invalidate する(M2-2 受入条件10)", async () => {
+    vi.mocked(apiClient.notes.retry).mockResolvedValue({
+      status: 200,
+      body: pendingScreenshotNote,
+      headers: new Headers(),
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useRetryNoteMutation("note-2"), { wrapper });
+    result.current.mutate();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes", "list"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: graphKeys.all });
   });
 
   it("409 のとき再実行できない旨のエラーを投げる", async () => {
@@ -412,6 +500,28 @@ describe("useDeleteNoteMutation", () => {
     result.current.mutate("note-1");
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+
+  it("成功時、一覧に加えて graph クエリも invalidate する(M2-2 受入条件10)", async () => {
+    vi.mocked(apiClient.notes.delete).mockResolvedValue({
+      status: 204,
+      body: undefined,
+      headers: new Headers(),
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useDeleteNoteMutation(), { wrapper });
+    result.current.mutate("note-1");
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes", "list"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: graphKeys.all });
   });
 });
 
