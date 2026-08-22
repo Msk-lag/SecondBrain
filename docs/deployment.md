@@ -311,7 +311,15 @@ $COMPOSE ps
 開発用の `docker-compose.yml` ではなく **`docker-compose.prod.yml`** を使う
 (mariadb を含まず、RDS を前提にしているため)。
 
-- [ ] redis / minio が healthy
+MinIO には Compose の healthcheck を置いていない(理由は `docker-compose.prod.yml` の
+コメント参照)。死活はホスト側から無認証の readiness endpoint で確認する:
+
+```bash
+curl -fsS http://127.0.0.1:9000/minio/health/live && echo "minio: live"
+```
+
+- [ ] redis が healthy(`$COMPOSE ps` の STATUS 列)
+- [ ] `minio/health/live` が成功する
 - [ ] minio-init が正常終了し、バケットとアプリ用ポリシーが作られた
 - [ ] MinIO バケットが非公開である(`mc anonymous get local/secondbrain` が `none`)
 
@@ -383,8 +391,13 @@ worker と同じ資格情報で、それぞれの API へ最小リクエスト�
 シェルの環境変数を素で参照すると、キーが空のまま送られ、**有効なキーでも 401 に
 見える**(Codex D0 指摘 [4])。
 
+**キーを親シェルへ展開してはいけない。** `sudo env $(sudo cat ...)` の形にすると、
+キーが `env` の引数として渡り、`ps` の出力と sudo の実行記録に平文で残る
+(Codex R1 指摘 [8])。下記のように、root のサブシェルの**中で**読み込む。
+
 ```bash
-sudo env $(sudo cat /etc/secondbrain/worker.env | xargs) sh -c '
+sudo sh -c '
+  . /etc/secondbrain/worker.env
   curl -s -o /dev/null -w "openai:%{http_code}\n" \
     https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"
   curl -s -o /dev/null -w "anthropic:%{http_code}\n" \
@@ -393,7 +406,8 @@ sudo env $(sudo cat /etc/secondbrain/worker.env | xargs) sh -c '
 '
 ```
 
-出力は HTTP ステータスだけで、キーそのものは表示されない。
+キーはコマンドラインにも出力にも現れない(sudo が記録するのは変数名のままの
+スクリプト本文で、展開後の値ではない)。得られるのは HTTP ステータスだけ。
 
 **両方 200 でなければ先へ進まない。** 401 のまま進むと、ノートは増えるのに
 エッジが一本も張られない状態になり、**しかも worker は正常起動したまま静かに
