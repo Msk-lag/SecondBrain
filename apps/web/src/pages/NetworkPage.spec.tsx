@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
@@ -364,6 +364,103 @@ describe("NetworkPage", () => {
       });
 
       expect(screen.getByText("関係の詳細")).toBeInTheDocument();
+    });
+
+    // 実行時経路そのものの回帰テスト(受入条件4)。`NetworkSelectionPanel.spec.tsx` の
+    // ケースS/ケースOは link オブジェクトを spec 側で直接組み立てているが、実行時に
+    // 実際に成立するのは「`NetworkCanvas`(実体は `ForceGraph2D`)へ渡した後、
+    // `react-force-graph`/`d3-force` が `graphData.links` の要素を in-place で書き換える」
+    // という経路そのものである。spec がケースS(文字列)しか検証していなかったために
+    // 本バグ(両端ノート名が常に「(不明なノート)」になる)が CI をすり抜けたため、
+    // この実行時経路そのものを再現する専用テストを持つ。
+    it("エッジ選択: links の端点が d3-force によりノードオブジェクトへ書き換え済みでも両端ノート名を表示する(受入条件4・実行時経路の回帰検知)", async () => {
+      vi.mocked(apiClient.graph.get).mockResolvedValue({
+        status: 200,
+        body: graphWithNodesAndEdge(),
+        headers: new Headers(),
+      });
+
+      renderPage();
+      await screen.findByTestId("network-canvas-stub");
+
+      const link = state.props?.graphData.links[0];
+      const nodes = state.props?.graphData.nodes ?? [];
+      if (!link) {
+        throw new Error("テストの前提: links[0] が存在しません");
+      }
+      const sourceNode = nodes.find((node) => node.id === "n1");
+      const targetNode = nodes.find((node) => node.id === "n2");
+      // `react-force-graph` が実行時に行うのと同じ、link オブジェクトの source/target を
+      // 文字列 ID からノードオブジェクト参照へ書き換える in-place な破壊的変更を再現する。
+      (link as unknown as { source: unknown }).source = sourceNode;
+      (link as unknown as { target: unknown }).target = targetNode;
+
+      act(() => {
+        state.props?.onLinkClick(link, new MouseEvent("click"));
+      });
+
+      // 「関係するノート」一覧にも同じラベルが出るため getAllByText で存在のみ確認する。
+      expect(screen.getAllByText("メモ1").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("メモ2").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("(不明なノート)")).toHaveLength(0);
+    });
+
+    // 受入条件7(後半): エッジ選択 → 一覧項目クリック → パネルのタイトルが
+    // 「ノートの詳細」へ切り替わる。単体テスト(NetworkSelectionPanel.spec.tsx)側は
+    // source 側をクリックしているため、ここでは反対側(target 側)をクリックする
+    // (Codex 指摘1。両項目が誤って同じ端点 ID を使う実装だと、単体テスト・この実行時
+    // テストのどちらか一方だけでは素通りしてしまうため、両方で反対側を検証する)。
+    it("エッジ選択 → 関係するノート一覧の target 側項目クリック → パネルが『ノートの詳細』へ切り替わる(受入条件7後半)", async () => {
+      vi.mocked(apiClient.graph.get).mockResolvedValue({
+        status: 200,
+        body: graphWithNodesAndEdge(),
+        headers: new Headers(),
+      });
+      vi.mocked(apiClient.notes.get).mockResolvedValue({
+        status: 200,
+        body: {
+          id: "n2",
+          userId: "user-1",
+          type: "memo" as const,
+          title: "メモ2",
+          body: "メモ2の本文です。",
+          summary: null,
+          tags: [] as string[],
+          status: "completed" as const,
+          failureReason: null,
+          concepts: [] as string[],
+          extractedText: null,
+          createdAt: "2026-07-09T00:00:00.000Z",
+          updatedAt: "2026-07-09T00:00:00.000Z",
+        },
+        headers: new Headers(),
+      });
+      const user = userEvent.setup();
+
+      renderPage();
+      await screen.findByTestId("network-canvas-stub");
+
+      act(() => {
+        state.props?.onLinkClick(
+          {
+            id: "e1",
+            source: "n1",
+            target: "n2",
+            directed: true,
+            relationType: "cause-solution",
+            description: "説明",
+            relatedness: 0.5,
+          },
+          new MouseEvent("click"),
+        );
+      });
+      expect(screen.getByText("関係の詳細")).toBeInTheDocument();
+
+      const relatedNotesSection = within(screen.getByRole("region", { name: "関係するノート" }));
+      await user.click(relatedNotesSection.getByText("メモ2"));
+
+      expect(await screen.findByText("ノートの詳細")).toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: "メモ2" })).toBeInTheDocument();
     });
 
     // Codex レビュー指摘・修正1: 選択状態はエッジ ID/ノード ID のみを保持し、最新の

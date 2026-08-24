@@ -1,5 +1,5 @@
 import type { GraphResponse } from "@secondbrain/shared";
-import { toGraphData } from "./to-graph-data";
+import { linkEndpointId, toGraphData } from "./to-graph-data";
 
 function makeResponse(overrides: Partial<GraphResponse> = {}): GraphResponse {
   return {
@@ -223,5 +223,19 @@ describe("toGraphData", () => {
 
     expect(adjacency.get("a")?.[0]?.direction).toBe("none");
     expect(adjacency.get("b")?.[0]?.direction).toBe("none");
+  });
+});
+
+// 受入条件5・実装手順4(a): `linkEndpointId()` の単体テスト。文字列ケース・
+// オブジェクトケースの両方が必須(片方だけだと他方の退行を検知できない)。
+describe("linkEndpointId", () => {
+  it("文字列を渡すとそのまま返す", () => {
+    expect(linkEndpointId("note-1")).toBe("note-1");
+  });
+
+  it("GraphViewNode オブジェクトを渡すと .id を返す", () => {
+    expect(linkEndpointId({ id: "note-2", label: "ノート2", type: "memo", degree: 1 })).toBe(
+      "note-2",
+    );
   });
 });

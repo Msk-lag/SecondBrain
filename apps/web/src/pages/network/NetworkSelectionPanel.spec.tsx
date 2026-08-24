@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import type { GraphAdjacency, GraphViewNode } from "@/features/graph/to-graph-data";
+import type { GraphAdjacency, GraphViewLink, GraphViewNode } from "@/features/graph/to-graph-data";
 import { apiClient } from "@/lib/api-client";
 import { NetworkSelectionPanel, type NetworkSelectionPanelProps } from "./NetworkSelectionPanel";
 
@@ -340,10 +340,13 @@ describe("NetworkSelectionPanel", () => {
       expect(screen.getByText("原因と解決策")).toBeInTheDocument();
       expect(screen.getByText("原因から解決策への説明")).toBeInTheDocument();
       expect(screen.getByText("関連度 80%")).toBeInTheDocument();
-      expect(screen.getByText("メモ1")).toBeInTheDocument();
-      expect(screen.getByText("(原因)")).toBeInTheDocument();
-      expect(screen.getByText("スクショ1")).toBeInTheDocument();
-      expect(screen.getByText("(解決策)")).toBeInTheDocument();
+      // 「関係するノート」一覧にも同じラベルが出るため(受入条件6・8)、向き表示欄
+      // (`edge-endpoint-summary`)へ範囲を絞って検証する(複数マッチでの失敗を避ける)。
+      const summary = within(screen.getByTestId("edge-endpoint-summary"));
+      expect(summary.getByText("メモ1")).toBeInTheDocument();
+      expect(summary.getByText("(原因)")).toBeInTheDocument();
+      expect(summary.getByText("スクショ1")).toBeInTheDocument();
+      expect(summary.getByText("(解決策)")).toBeInTheDocument();
     });
 
     it("無向エッジ(same-theme)は役割ラベルなしで両端名のみ表示する", () => {
@@ -410,7 +413,183 @@ describe("NetworkSelectionPanel", () => {
         },
       });
 
+      // 受入条件14: このテストは一覧追加後も落ちない(向き表示欄の結合テキストと、
+      // 一覧の個別項目テキストが異なる文字列のため衝突しない)。ただし一覧側にも
+      // 「(不明なノート)」項目が2件(source・target)出ることを追加で検証する
+      // (受入条件10。計画の指示どおり、既存アサーションは書き換えずに追加する)。
       expect(screen.getByText("(不明なノート) ・ (不明なノート)")).toBeInTheDocument();
+
+      const relatedNotesSection = within(screen.getByRole("region", { name: "関係するノート" }));
+      const unknownItems = relatedNotesSection.getAllByText("(不明なノート)");
+      expect(unknownItems).toHaveLength(2);
+      for (const item of unknownItems) {
+        // クリック不可(決定4)。button/link のどちらの役割も持たない。
+        expect(item.closest('[role="button"]')).toBeNull();
+        expect(item.closest('[role="link"]')).toBeNull();
+        expect(item.closest("button")).toBeNull();
+      }
+    });
+
+    // 以下の2ケース(ケースS・ケースO)は両方必須である。`d3-force` は link の
+    // `source`/`target` を文字列からノードオブジェクト参照へ in-place で書き換えるため、
+    // 実行時に実際に成立するのはケースO の形である。ケースS だけを検証していたために
+    // 本バグ(両端ノート名が常に「(不明なノート)」になる)が CI をすり抜けた。
+    // 逆にケースO だけにすると、文字列のまま渡ってくるケース(初回描画前など)の
+    // 退行を検知できなくなるため、両方を持つ。
+    it("source/target が文字列のとき両端ノート名を表示する(ケースS)", () => {
+      renderPanel({
+        selection: {
+          type: "edge",
+          link: {
+            id: "e1",
+            source: "n1",
+            target: "n2",
+            directed: true,
+            relationType: "cause-solution",
+            description: "原因から解決策への説明",
+            relatedness: 0.8,
+          },
+        },
+      });
+
+      // 「関係するノート」一覧にも同じラベルが出るため、向き表示欄へ範囲を絞って検証する。
+      const summary = within(screen.getByTestId("edge-endpoint-summary"));
+      expect(summary.getByText("メモ1")).toBeInTheDocument();
+      expect(summary.getByText("スクショ1")).toBeInTheDocument();
+      expect(screen.queryAllByText("(不明なノート)")).toHaveLength(0);
+    });
+
+    it("source/target が d3-force 書き換え後のノードオブジェクトのときも両端ノート名を表示する(ケースO・退行検知)", () => {
+      // `react-force-graph`/`d3-force` はレンダリング後、link オブジェクトの
+      // `source`/`target` を文字列 ID からノードオブジェクト参照へ in-place で
+      // 書き換える。`GraphViewLink.source`/`target` の型は `string | GraphViewNode`
+      // なので、素の `GraphViewNode` を渡すだけでこのケースを表現できる
+      // (型が実態に合ったため、以前は必要だった `as unknown as` キャストは不要になった)。
+      const link: GraphViewLink = {
+        id: "e1",
+        source: { id: "n1", label: "メモ1", type: "memo", degree: 1 },
+        target: { id: "n2", label: "スクショ1", type: "screenshot", degree: 1 },
+        directed: true,
+        relationType: "cause-solution",
+        description: "原因から解決策への説明",
+        relatedness: 0.8,
+      };
+
+      renderPanel({
+        selection: {
+          type: "edge",
+          link,
+        },
+      });
+
+      // 「関係するノート」一覧にも同じラベルが出るため、向き表示欄へ範囲を絞って検証する。
+      const summary = within(screen.getByTestId("edge-endpoint-summary"));
+      expect(summary.getByText("メモ1")).toBeInTheDocument();
+      expect(summary.getByText("スクショ1")).toBeInTheDocument();
+      expect(screen.queryAllByText("(不明なノート)")).toHaveLength(0);
+    });
+
+    describe("関係するノート一覧(動線追加。§設計決定3〜5)", () => {
+      const directedLink: GraphViewLink = {
+        id: "e1",
+        source: "n1",
+        target: "n2",
+        directed: true,
+        relationType: "cause-solution",
+        description: "原因から解決策への説明",
+        relatedness: 0.8,
+      };
+
+      it("受入条件6: 「関係するノート(2)」セクションが表示され、両端ノート名が一覧される", () => {
+        renderPanel({ selection: { type: "edge", link: directedLink } });
+
+        const list = within(screen.getByRole("region", { name: "関係するノート" }));
+        expect(list.getByText("関係するノート(2)")).toBeInTheDocument();
+        expect(list.getByText("メモ1")).toBeInTheDocument();
+        expect(list.getByText("スクショ1")).toBeInTheDocument();
+      });
+
+      // 受入条件7: source 側・target 側を独立にクリックして、それぞれ異なる ID で
+      // onSelectNode が呼ばれることを検証する(両方必須)。片側だけの検証では、
+      // 両項目が誤って同じ端点 ID を使う実装(例: 両方に sourceId を渡すコピペ誤り)を
+      // 表示テストもクリックテストも素通りさせてしまうため(Codex 指摘1)。
+      it("受入条件7: 関係するノート一覧の source 側項目をクリックすると onSelectNode が source のノート ID で呼ばれる", async () => {
+        const user = userEvent.setup();
+        const { onSelectNode } = renderPanel({ selection: { type: "edge", link: directedLink } });
+
+        const list = within(screen.getByRole("region", { name: "関係するノート" }));
+        await user.click(list.getByText("メモ1"));
+
+        expect(onSelectNode).toHaveBeenCalledWith("n1");
+      });
+
+      it("受入条件7: 関係するノート一覧の target 側項目をクリックすると onSelectNode が target のノート ID で呼ばれる", async () => {
+        const user = userEvent.setup();
+        const { onSelectNode } = renderPanel({ selection: { type: "edge", link: directedLink } });
+
+        const list = within(screen.getByRole("region", { name: "関係するノート" }));
+        await user.click(list.getByText("スクショ1"));
+
+        expect(onSelectNode).toHaveBeenCalledWith("n2");
+      });
+
+      it("受入条件8: 有向 + 役割ラベル持ちのとき、一覧項目に (原因)(解決策) が出る", () => {
+        renderPanel({ selection: { type: "edge", link: directedLink } });
+
+        const list = within(screen.getByRole("region", { name: "関係するノート" }));
+        expect(list.getByText("(原因)")).toBeInTheDocument();
+        expect(list.getByText("(解決策)")).toBeInTheDocument();
+      });
+
+      it("受入条件9: directed: false + cause-solution のとき、一覧に役割ラベルが出ない(退行検知)", () => {
+        renderPanel({
+          selection: {
+            type: "edge",
+            link: {
+              id: "e4",
+              source: "n1",
+              target: "n2",
+              directed: false,
+              relationType: "cause-solution",
+              description: "向きが確定していない関係の説明",
+              relatedness: 0.5,
+            },
+          },
+        });
+
+        const list = within(screen.getByRole("region", { name: "関係するノート" }));
+        expect(list.getByText("メモ1")).toBeInTheDocument();
+        expect(list.getByText("スクショ1")).toBeInTheDocument();
+        expect(list.queryByText("(原因)")).not.toBeInTheDocument();
+        expect(list.queryByText("(解決策)")).not.toBeInTheDocument();
+      });
+
+      it("受入条件10: nodesById に無い端点は (不明なノート) のクリック不可項目になる", () => {
+        renderPanel({
+          selection: {
+            type: "edge",
+            link: {
+              id: "e3",
+              source: "missing-source",
+              target: "missing-target",
+              directed: false,
+              relationType: "other",
+              description: "不明なノート間の関係",
+              relatedness: 0.1,
+            },
+          },
+        });
+
+        const list = within(screen.getByRole("region", { name: "関係するノート" }));
+        const unknownItems = list.getAllByText("(不明なノート)");
+        expect(unknownItems).toHaveLength(2);
+        for (const item of unknownItems) {
+          expect(item.closest('[role="button"]')).toBeNull();
+          expect(item.closest('[role="link"]')).toBeNull();
+          expect(item.closest("button")).toBeNull();
+          expect(item.closest("a")).toBeNull();
+        }
+      });
     });
   });
 });
