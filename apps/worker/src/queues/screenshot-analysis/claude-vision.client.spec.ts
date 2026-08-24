@@ -2,8 +2,36 @@ import {
   ClaudeVisionClient,
   CLAUDE_VISION_REQUEST_TIMEOUT_MS,
   createClaudeVisionClientFromEnv,
+  SCREENSHOT_ANALYSIS_SCHEMA,
 } from "./claude-vision.client";
 import { SanitizedException } from "./sanitize-error";
+
+/**
+ * Anthropic の構造化出力(`output_config.format.json_schema`)は配列型の `minItems`/
+ * `maxItems` をサポートしないため(2026-08-24 本番障害。実機プローブで確定)、
+ * これらのキーが JSON Schema のどの階層にも紛れ込んでいないことを再帰的に検証するための
+ * ヘルパー。オブジェクト・配列を辿り、禁止キーが出現したパス(例: "properties.tags.maxItems")
+ * を文字列の配列として集めて返す。
+ */
+const FORBIDDEN_SCHEMA_KEYS = ["minItems", "maxItems"] as const;
+
+function findForbiddenSchemaKeys(value: unknown, path = ""): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => findForbiddenSchemaKeys(item, `${path}[${index}]`));
+  }
+  if (value !== null && typeof value === "object") {
+    const paths: string[] = [];
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const childPath = path ? `${path}.${key}` : key;
+      if ((FORBIDDEN_SCHEMA_KEYS as readonly string[]).includes(key)) {
+        paths.push(childPath);
+      }
+      paths.push(...findForbiddenSchemaKeys(child, childPath));
+    }
+    return paths;
+  }
+  return [];
+}
 
 const { createMock, constructorMock, MockAPIError } = vi.hoisted(() => {
   class MockAPIError extends Error {
@@ -175,5 +203,31 @@ describe("createClaudeVisionClientFromEnv", () => {
   it("ANTHROPIC_API_KEY が有効な値の場合はクライアントを構築する", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-test-key";
     expect(() => createClaudeVisionClientFromEnv()).not.toThrow();
+  });
+});
+
+describe("SCREENSHOT_ANALYSIS_SCHEMA の静的検査", () => {
+  it("SCREENSHOT_ANALYSIS_SCHEMA は minItems/maxItems を含まない(Anthropic 構造化出力が非対応)", () => {
+    const foundPaths = findForbiddenSchemaKeys(SCREENSHOT_ANALYSIS_SCHEMA);
+    expect(foundPaths).toEqual([]);
+  });
+
+  it("findForbiddenSchemaKeys はネストした items 階層の禁止キーを検出できる", () => {
+    const fakeSchema = {
+      type: "object",
+      properties: {
+        outer: {
+          type: "array",
+          items: {
+            type: "array",
+            items: { type: "string" },
+            maxItems: 5,
+          },
+        },
+      },
+    };
+
+    const foundPaths = findForbiddenSchemaKeys(fakeSchema);
+    expect(foundPaths).toEqual(["properties.outer.items.maxItems"]);
   });
 });
