@@ -18,12 +18,28 @@ export interface GraphViewNode {
  */
 export interface GraphViewLink {
   id: string;
-  source: string;
-  target: string;
+  /**
+   * 初回描画前は文字列(ノート ID)。`react-force-graph` が `d3-force` へ渡した後、
+   * この値は破壊的に `GraphViewNode` オブジェクト参照へ書き換わる(§下記 `toGraphData`
+   * の JSDoc)。読むときは必ず {@link linkEndpointId} を通すこと。
+   */
+  source: string | GraphViewNode;
+  /** {@link GraphViewLink.source} と同じ注意点。必ず {@link linkEndpointId} を通すこと。 */
+  target: string | GraphViewNode;
   directed: boolean;
   relationType: NoteRelationType;
   description: string;
   relatedness: number;
+}
+
+/**
+ * `GraphViewLink.source`/`target` の端点 ID を正規化して取得する。
+ * 文字列(初回描画前)ならそのまま返し、`react-force-graph` による破壊的書き換え後の
+ * ノードオブジェクトなら `.id` を返す。`link.source`/`link.target` を直接読む代わりに
+ * 必ずこの関数を通すこと(§下記 `toGraphData` の JSDoc)。
+ */
+export function linkEndpointId(endpoint: string | GraphViewNode): string {
+  return typeof endpoint === "string" ? endpoint : endpoint.id;
 }
 
 export interface GraphViewData {
@@ -83,6 +99,14 @@ export interface ToGraphDataResult {
  *    将来 `adjacency` のエントリが `links` の要素を参照するよう書き換えられる
  *    誘因を残さないため)。選択ノードから見た向きは `AdjacencyEntry.direction`
  *    (`"outgoing"`/`"incoming"`/`"none"`)へ畳み込んで持たせる。
+ *
+ * この罠は `adjacency` 側では上記のとおり守られていたが、**エッジ選択パネルの経路
+ * (`NetworkSelectionPanel.tsx` の `EdgeSelectionContent` が `link.source`/`link.target`
+ * を直接読む箇所)だけが漏れていた**(2026-08-24 に両端ノート名が常に
+ * `(不明なノート)` になる表示バグとして顕在化)。原因は `GraphViewLink.source`/`target`
+ * の型が `string` のままで実行時の実態(書き換え後はオブジェクト)と食い違っており、
+ * コンパイラが検知できなかったことにある。型を `string | GraphViewNode` に正直化した
+ * 上で、`links` の端点を読むときは必ず {@link linkEndpointId} を通すこと。
  */
 export function toGraphData(response: GraphResponse): ToGraphDataResult {
   const degreeByNodeId = new Map<string, number>();

@@ -11,6 +11,7 @@ import type {
   GraphViewLink,
   GraphViewNode,
 } from "@/features/graph/to-graph-data";
+import { linkEndpointId } from "@/features/graph/to-graph-data";
 import { useNoteImage, useNoteQuery } from "@/features/notes/api";
 import {
   RELATION_DIRECTION_ROLE_LABELS,
@@ -233,10 +234,51 @@ function NodeSelectionContent({
 function EdgeSelectionContent({
   link,
   nodesById,
-}: Readonly<{ link: GraphViewLink; nodesById: ReadonlyMap<string, GraphViewNode> }>) {
-  const sourceLabel = nodeLabelOf(nodesById, link.source);
-  const targetLabel = nodeLabelOf(nodesById, link.target);
-  const roleLabels = RELATION_DIRECTION_ROLE_LABELS[link.relationType];
+  onSelectNode,
+}: Readonly<{
+  link: GraphViewLink;
+  nodesById: ReadonlyMap<string, GraphViewNode>;
+  /** 「関係するノート」一覧の項目クリック時に、そのノートを選択状態にする(§設計決定3)。 */
+  onSelectNode: (nodeId: string) => void;
+}>) {
+  // `link.source`/`link.target` は `react-force-graph` による破壊的書き換え後は
+  // ノードオブジェクト参照になっているため、素で読まず必ず `linkEndpointId()` で
+  // 正規化してから使う(§`to-graph-data.ts` の設計コメント参照)。
+  const sourceId = linkEndpointId(link.source);
+  const targetId = linkEndpointId(link.target);
+  const sourceLabel = nodeLabelOf(nodesById, sourceId);
+  const targetLabel = nodeLabelOf(nodesById, targetId);
+  // `directed === false` のエッジは、役割ラベルを持つ種類(`cause-solution` 等)であっても
+  // 保存データに存在しない向きをユーザーに提示しないため、ここで undefined へ畳んでおく
+  // (Codex レビュー指摘・修正1 の判断を踏襲)。以降は `roleLabels` の有無だけで分岐でき、
+  // 到達不能な分岐(`hasRoleLabels` が真なのに `roleLabels` が無い経路)が生まれない。
+  const roleLabels = link.directed ? RELATION_DIRECTION_ROLE_LABELS[link.relationType] : undefined;
+
+  // 「関係するノート」一覧の2項目(source → target の順)。役割ラベルは既存の向き表示と
+  // 同じ規則(`roleLabels` が存在するときのみ)で付ける(§設計決定5)。
+  //
+  // `side` は React key 用(Codex レビュー指摘・LOW)。現在の DB スキーマでは
+  // `note_a_id < note_b_id`(`packages/db/src/schema/note-relations.ts` の
+  // `note_relations_note_a_id_lt_note_b_id` CHECK 制約。migration
+  // `0006_add_note_relations.sql` L18 に生成済み)により source/target が同一ノートを
+  // 指す自己ループは発生しないが、key をノート ID だけに依存させるとこの DB 制約が
+  // 将来変わった場合に静かに壊れる(2項目が同じ key になり React の要素識別が不安定に
+  // なる)。一覧内での位置(source 側 / target 側)は常に一意で安定しているため、
+  // 分岐を増やさずに key へ含めておく。
+  const relatedNoteEndpoints = [
+    {
+      side: "source",
+      id: sourceId,
+      label: sourceLabel,
+      roleLabel: roleLabels?.outgoing ?? null,
+    },
+    {
+      side: "target",
+      id: targetId,
+      label: targetLabel,
+      roleLabel: roleLabels?.incoming ?? null,
+    },
+  ] as const;
 
   return (
     <div className="flex flex-col gap-3">
@@ -247,10 +289,15 @@ function EdgeSelectionContent({
 
       <p className="text-sm text-ink-700">{link.description}</p>
 
-      {link.directed && roleLabels ? (
+      {roleLabels ? (
         // ラベルと役割ラベルを兄弟要素として分ける(入れ子にすると要素の textContent が
         // 結合されてしまい、spec からのテキスト検証がしづらくなるため)。
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-ink-900">
+        // `data-testid` は、下の「関係するノート」一覧にも同じラベルが出るため
+        // (spec が `within()` で表示領域を区別できるようにするための追加。見た目には影響しない)。
+        <div
+          data-testid="edge-endpoint-summary"
+          className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-ink-900"
+        >
           <span>{sourceLabel}</span>
           <span className="text-xs text-ink-500">({roleLabels.outgoing})</span>
           <span aria-hidden="true">→</span>
@@ -258,10 +305,56 @@ function EdgeSelectionContent({
           <span className="text-xs text-ink-500">({roleLabels.incoming})</span>
         </div>
       ) : (
-        <p className="text-sm text-ink-900">
+        <p data-testid="edge-endpoint-summary" className="text-sm text-ink-900">
           {sourceLabel} ・ {targetLabel}
         </p>
       )}
+
+      {/*
+       * 「関係するノート」一覧(§設計決定5)。既存の表示(バッジ・説明・向き表示)の
+       * 下に追記し、既存表示は変更しない。件数は常に2(このエッジの両端)。
+       * マークアップ・className は `ConnectedNodesSection` を踏襲する。
+       */}
+      <section aria-label="関係するノート">
+        <h4 className="mb-2 text-sm font-semibold text-ink-900">関係するノート(2)</h4>
+        <ul className="flex flex-col gap-2">
+          {relatedNoteEndpoints.map((endpoint) => {
+            const isKnown = nodesById.has(endpoint.id);
+            // ボタン/プレーン要素の両方で使い回す中身(重複を避けるため一度だけ組み立てる)。
+            const itemContent = (
+              <>
+                <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                  {endpoint.roleLabel && (
+                    <span className="text-xs text-ink-500">({endpoint.roleLabel})</span>
+                  )}
+                </div>
+                <p className="truncate text-sm font-medium text-ink-900">{endpoint.label}</p>
+              </>
+            );
+            return (
+              <li key={`${endpoint.side}:${endpoint.id}`}>
+                {isKnown ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelectNode(endpoint.id)}
+                    className="block w-full rounded-lg border border-border px-3 py-2 text-left hover:bg-surface-muted"
+                  >
+                    {itemContent}
+                  </button>
+                ) : (
+                  // 存在しないノート ID で onSelectNode を呼ぶと NetworkPage 側の
+                  // resolvedSelection が nodesById.has() で弾いて選択解除になり、パネルが
+                  // 初期表示へ戻ってしまう(決定4)。クリックしたのに情報が消える行き止まりを
+                  // 避けるため、クリック不可のプレーンなテキスト項目として描画する。
+                  <div className="block w-full rounded-lg border border-border px-3 py-2 text-left">
+                    {itemContent}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
     </div>
   );
 }
@@ -304,7 +397,11 @@ export function NetworkSelectionPanel({
           />
         )}
         {selection?.type === "edge" && (
-          <EdgeSelectionContent link={selection.link} nodesById={nodesById} />
+          <EdgeSelectionContent
+            link={selection.link}
+            nodesById={nodesById}
+            onSelectNode={onSelectNode}
+          />
         )}
       </CardContent>
     </Card>
