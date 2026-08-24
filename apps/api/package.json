@@ -31,7 +31,7 @@
     "@ts-rest/core": "^3.52.1",
     "@ts-rest/nest": "^3.52.1",
     "bcryptjs": "^3.0.2",
-    "bullmq": "^5.79.2",
+    "bullmq": "^5.80.2",
     "mysql2": "^3.22.5",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

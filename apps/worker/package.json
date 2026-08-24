@@ -27,7 +27,7 @@
     "@secondbrain/db": "workspace:*",
     "@secondbrain/shared": "workspace:*",
     "@secondbrain/storage": "workspace:*",
-    "bullmq": "^5.79.2",
+    "bullmq": "^5.80.2",
     "mysql2": "^3.22.5",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
