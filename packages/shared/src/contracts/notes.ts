@@ -62,7 +62,16 @@ export const listNotesResponseSchema = z.object({
 
 /**
  * AI 解析結果(Claude の構造化出力)のランタイム再検証用スキーマ。
- * § AI 解析の出力スキーマ・プロンプト設計 の JSON Schema と同一の制約を持つ。
+ * § AI 解析の出力スキーマ・プロンプト設計 の JSON Schema(`apps/worker/.../
+ * claude-vision.client.ts` の `SCREENSHOT_ANALYSIS_SCHEMA`)とおおむね同一の制約を持つが、
+ * **件数(tags 最大8個/concepts 最大10個)だけは JSON Schema 側に置けない。** Anthropic の
+ * 構造化出力(`output_config.format.json_schema`)は配列型の `minItems`/`maxItems` を
+ * サポートしておらず、付けると実機で 400 になるため(2026-08-24 本番障害。実機プローブで
+ * 確定。詳細は `SCREENSHOT_ANALYSIS_SCHEMA` 前コメント参照)、件数上限は JSON Schema 側では
+ * description・システムプロンプトで Claude に伝えるのみとし、最終的な担保はこの Zod 側の
+ * 切り詰め(`transform`)で行う。拒否ではなく切り詰めにしているのは、
+ * `relation-judge.client.ts` が DB 列上限超過の `description` を失敗ではなく切り詰めで
+ * 扱っている既存方針(要件 §10 項目7)に揃えるため。
  * title/summary は trim 後の空文字列・空白のみを明示的に拒否する
  * (Codex レビュー r8 指摘 [5] への対応。JSON Schema 側の minLength だけでは
  * trim 後に空になるケースを防げないため、アプリ側の Zod 検証で二重に防御する)。
@@ -70,8 +79,8 @@ export const listNotesResponseSchema = z.object({
 export const screenshotAnalysisResultSchema = z.object({
   title: z.string().trim().min(1).max(100),
   summary: z.string().trim().min(1).max(500),
-  tags: z.array(z.string().max(50)).min(0).max(8),
-  concepts: z.array(z.string().max(50)).min(0).max(10),
+  tags: z.array(z.string().max(50)).transform((a) => a.slice(0, 8)),
+  concepts: z.array(z.string().max(50)).transform((a) => a.slice(0, 10)),
   extractedText: z.string().max(3000),
 });
 export type ScreenshotAnalysisResult = z.infer<typeof screenshotAnalysisResultSchema>;

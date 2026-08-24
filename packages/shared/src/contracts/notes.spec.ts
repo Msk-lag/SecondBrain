@@ -452,20 +452,42 @@ describe("screenshotAnalysisResultSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("tags が上限(8個)を超える場合は拒否する", () => {
-    const result = screenshotAnalysisResultSchema.safeParse({
-      ...valid,
-      tags: Array.from({ length: 9 }, (_, i) => `tag${i}`),
-    });
-    expect(result.success).toBe(false);
+  it("tags が上限(8個)を超える場合は8個に切り詰める", () => {
+    const tags = Array.from({ length: 9 }, (_, i) => `tag${i}`);
+    const result = screenshotAnalysisResultSchema.safeParse({ ...valid, tags });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.tags).toHaveLength(8);
+      expect(result.data.tags).toEqual(tags.slice(0, 8));
+    }
   });
 
-  it("concepts が上限(10個)を超える場合は拒否する", () => {
-    const result = screenshotAnalysisResultSchema.safeParse({
-      ...valid,
-      concepts: Array.from({ length: 11 }, (_, i) => `concept${i}`),
-    });
-    expect(result.success).toBe(false);
+  it("tags がちょうど8個の場合は切り詰められずそのまま通る", () => {
+    const tags = Array.from({ length: 8 }, (_, i) => `tag${i}`);
+    const result = screenshotAnalysisResultSchema.safeParse({ ...valid, tags });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.tags).toEqual(tags);
+    }
+  });
+
+  it("concepts が上限(10個)を超える場合は10個に切り詰める", () => {
+    const concepts = Array.from({ length: 11 }, (_, i) => `concept${i}`);
+    const result = screenshotAnalysisResultSchema.safeParse({ ...valid, concepts });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.concepts).toHaveLength(10);
+      expect(result.data.concepts).toEqual(concepts.slice(0, 10));
+    }
+  });
+
+  it("concepts がちょうど10個の場合は切り詰められずそのまま通る", () => {
+    const concepts = Array.from({ length: 10 }, (_, i) => `concept${i}`);
+    const result = screenshotAnalysisResultSchema.safeParse({ ...valid, concepts });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.concepts).toEqual(concepts);
+    }
   });
 
   it("extractedText が上限(3000文字)を超える場合は拒否する", () => {
